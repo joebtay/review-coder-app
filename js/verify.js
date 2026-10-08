@@ -1,0 +1,249 @@
+// Verify: draw a locked sample, then check the first coder's codes unit by unit.
+
+import { S, docEvents, allEvents, addEvent, firstCodes, firstExtras, unitList, findUnit, populationFor, fieldDef, valueDef, refreshEvents, notify } from './data.js';
+import { verifyState, isDone, memoFor, commentsFor } from './events.js';
+import { draw } from './sampler.js';
+import { h, chip, colourFor, bar, pct } from './ui.js';
+import { openCodebook, toggleCodebook } from './codebook.js';
+import { openPdf, pdfParts } from './documents.js';
+
+export const V = { frame: null, sampleId: null, filter: 'todo', unit: null, fieldIdx: 0, picker: null, pickQ: '', draft: null };
+
+const ACTIONS = [['agree', 'Agree', 'A'], ['disagree', 'Disagree', 'D'], ['other', 'Other code', 'O'], ['unsure', 'Unsure', 'U']];
+const docOrder = () => new Map(S.docs.map((d, i) => [d.id, i]));
+
+function verifiableFrames() {
+  const first = S.review.layers.find((l) => l.id === S.review.first_layer);
+  return Object.values(S.frames).filter((f) => first && (first.frames || []).includes(f.id));
+}
+
+function sampleQueue(sample) {
+  const ord = docOrder();
+  const pos = new Map();
+  for (const [doc] of ord) unitList(doc).forEach((u, i) => pos.set(doc + '|' + u.id, i));
+  return sample.units.slice().sort((a, b) => (ord.get(a.doc) - ord.get(b.doc)) || ((pos.get(a.doc + '|' + a.unit) ?? 0) - (pos.get(b.doc + '|' + b.unit) ?? 0)));
+}
+
+/** My verification state for every unit in a sample, built in one pass over the events. */
+function indexMine(sample) {
+  const idx = new Map();
+  const get = (u) => { if (!idx.has(u)) idx.set(u, { fields: {}, done: false }); return idx.get(u); };
+  for (const e of allEvents().sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : a.id < b.id ? -1 : 1))) {
+    if (e.coder !== S.handle || e.sample !== sample.id || e.frame !== sample.frame) continue;
+    const s = get(e.unit);
+    if (e.type === 'verify') { if (e.action === 'clear') delete s.fields[e.field]; else s.fields[e.field] = e; }
+    else if (e.type === 'done') s.done = true;
+    else if (e.type === 'reopen') s.done = false;
+  }
+  return idx;
+}
+
+const effective = (codes, st, field) => {
+  const e = st.fields[field];
+  if (!e) return codes[field] ?? null;
+  if (e.action === 'agree') return codes[field] ?? null;
+  if (e.action === 'disagree') return null;
+  if (e.action === 'other') return e.value ?? null;
+  return codes[field] ?? null;
+};
+
+function unresolved(frame, codes, st) {
+  return frame.fields.filter((f) => !st.fields[f.id] && !(codes[f.id] == null && !f.required));
+}
+
+function badParent(frame, f, codes, st) {
+  if (!f.depends_on) return null;
+  const v = effective(codes, st, f.id);
+  if (v == null) return null;
+  const def = f.values.find((x) => x.id === v);
+  const parent = effective(codes, st, f.depends_on);
+  if (def && def.parent && def.parent !== parent) return `${v} belongs to ${def.parent}, not ${parent ?? '(blank)'}.`;
+  return null;
+}
+
+// ---------- sampler ----------
+function renderSampler(root, frame) {
+  const sp = S.review.sampling || { fraction: 0.15, min_per_stratum: 2 };
+  const d = new Date();
+  if (!V.draft) V.draft = { seed: Number(`${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`), fraction: sp.fraction, min: sp.min_per_stratum, result: null, reason: 'First verification sample' };
+  const dr = V.draft;
+  const preview = () => { dr.result = draw(populationFor(frame.id), { fraction: dr.fraction, minPer: dr.min, seed: dr.seed }); renderVerify(root); };
+  const lock = async () => {
+    const n = S.samples.filter((s) => s.frame === frame.id).length + 1;
+    let id = `${frame.id}-s${n}`;
+    const obj = () => ({ id, frame: frame.id, layer: S.review.first_layer, created: new Date().toISOString(), created_by: S.handle, seed: dr.seed, fraction: dr.fraction, min_per_stratum: dr.min,
+      stratify_by: frame.stratify_by, population: dr.result.population, strata: dr.result.strata, topped_up: dr.result.toppedUp, units: dr.result.units, locked: true, reason: dr.reason });
+    for (let k = 0; k < 20; k++) {
+      try { await S.store.writeJSON(`samples/${id}.json`, obj(), { message: `Draw sample ${id} (seed ${dr.seed})` }); S.samples.push(obj()); V.sampleId = id; V.draft = null; notify(); return; }
+      catch (e) { if (e.status === 422 || e.status === 409) { id = `${frame.id}-s${n + k + 1}`; continue; } alert('Could not save the sample: ' + e.message); return; }
+    }
+  };
+  const r = dr.result;
+  root.replaceChildren(h('div', { class: 'page narrow' },
+    h('div', { class: 'ph' }, h('h1', { text: 'Draw a verification sample' }), h('div', { class: 'muted', text: `${frame.name} frame · checks the ${S.review.layers.find((l) => l.id === S.review.first_layer).label} layer` })),
+    h('section', { class: 'card' },
+      h('p', { text: `The sample takes ${Math.round(dr.fraction * 100)}% of the units in each ${frame.fields.find((f) => f.id === frame.stratify_by).label.toLowerCase()} group, at least ${dr.min} per group, spread across documents, then adds one unit from any document not yet covered. The seed and counts are saved with the sample. Once locked, it cannot be redrawn.` }),
+      h('div', { class: 'form' },
+        h('label', null, 'Sample size', h('select', { onchange: (e) => { dr.fraction = Number(e.target.value); dr.result = null; renderVerify(root); } }, [...new Set([0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.5, 1, dr.fraction])].sort((a, b) => a - b).map((x) => h('option', { value: x, selected: x === dr.fraction, text: x === 1 ? '100% (every unit)' : `${Math.round(x * 100)}%` })))),
+        h('label', null, 'Random seed', h('input', { type: 'text', value: dr.seed, onchange: (e) => { dr.seed = parseInt(e.target.value, 10) || 1; dr.result = null; renderVerify(root); } })),
+        h('label', null, 'Reason', h('input', { type: 'text', value: dr.reason, onchange: (e) => { dr.reason = e.target.value; } }))),
+      h('div', { class: 'row' }, h('button', { type: 'button', class: 'btn', onclick: preview, disabled: !S.ready, text: S.ready ? 'Preview draw' : 'Loading the corpus' }),
+        r ? h('button', { type: 'button', class: 'btn primary', onclick: lock, text: `Lock and save ${r.units.length} units` }) : null)),
+    r ? h('section', { class: 'card' }, h('h2', { text: `${r.units.length} of ${r.population.toLocaleString()} units (${(100 * r.units.length / r.population).toFixed(1)}%)` }),
+      h('p', { class: 'muted', text: `${r.toppedUp.length} documents needed a top-up unit so every document is checked at least once.` }),
+      h('table', { class: 't' }, h('thead', null, h('tr', null, ['Group', 'In corpus', 'Drawn'].map((x) => h('th', { text: x })))),
+        h('tbody', null, Object.entries(r.strata).sort().map(([k, s]) => h('tr', null, h('td', null, h('span', { class: 'dot', style: { background: colourFor(k) } }), ' ' + k), h('td', { class: 'mono', text: s.population }), h('td', { class: 'mono', text: s.drawn })))))) : null));
+}
+
+// ---------- main ----------
+export function renderVerify(root) {
+  const frames = verifiableFrames();
+  if (!S.review.first_layer || !frames.length) { root.replaceChildren(h('div', { class: 'page' }, h('h1', { text: 'Verify' }), h('p', { class: 'muted', text: 'This review has no coded layer to verify yet.' }))); return; }
+  if (!V.frame || !frames.find((f) => f.id === V.frame)) V.frame = frames[0].id;
+  const frame = S.frames[V.frame];
+  const samples = S.samples.filter((s) => s.frame === frame.id && s.layer === S.review.first_layer);
+  if (!samples.length || V.sampleId === '__new') { renderSampler(root, frame); return; }
+  const sample = samples.find((s) => s.id === V.sampleId) || samples[samples.length - 1];
+  V.sampleId = sample.id;
+  if (!S.ready) { root.replaceChildren(h('div', { class: 'page' }, h('p', { class: 'muted', text: `Loading ${S.loading.done} of ${S.loading.total} files` }))); return; }
+
+  const queue = sampleQueue(sample);
+  const idx = indexMine(sample);
+  const stOf = (u) => idx.get(u.unit) || { fields: {}, done: false };
+  const doneN = queue.filter((u) => stOf(u).done).length;
+  const unsureN = queue.filter((u) => Object.values(stOf(u).fields).some((e) => e.action === 'unsure')).length;
+  const matches = (u) => V.filter === 'all' || (V.filter === 'todo' ? !stOf(u).done : V.filter === 'unsure' ? Object.values(stOf(u).fields).some((e) => e.action === 'unsure') : stOf(u).done);
+  const shown = queue.filter(matches);
+  let cur = queue.find((u) => u.unit === V.unit) || shown[0] || queue[0];
+  V.unit = cur.unit;
+  const goto = (u) => { if (u) { V.unit = u.unit; V.fieldIdx = 0; V.picker = null; renderVerify(root); window.scrollTo(0, 0); } };
+  const qi = queue.findIndex((u) => u.unit === cur.unit);
+  const pos = qi;
+  const next = () => goto(queue.slice(qi + 1).find(matches) || shown.find((u) => u.unit !== cur.unit) || null);
+  const prev = () => goto(queue[qi - 1]);
+
+  const doc = S.docById.get(cur.doc);
+  const unit = findUnit(cur.doc, cur.unit);
+  const codes = firstCodes(cur.doc, cur.unit, frame.id) || {};
+  const st = stOf(cur);
+  const events = docEvents(cur.doc);
+  const extras = firstExtras(cur.doc, cur.unit);
+  const list = unitList(cur.doc);
+  const ui = list.findIndex((u) => u.id === cur.unit);
+  const para = unit && unit.kind === 'paragraph';
+
+  const act = (field, action, value) => { addEvent(cur.doc, 'verify', { sample: sample.id, unit: cur.unit, frame: frame.id, field: field.id, action, value: value ?? null }); };
+  const open = unresolved(frame, codes, st);
+  const agreeRest = () => { for (const f of open) if (!badParent(frame, f, codes, st)) act(f, 'agree'); };
+  const finish = () => { addEvent(cur.doc, 'done', { sample: sample.id, unit: cur.unit, frame: frame.id }); };
+
+  // sidebar
+  const strata = Object.entries(sample.strata || {}).sort();
+  const stratumOf = (u) => { const c = firstCodes(u.doc, u.unit, frame.id); return c ? c[frame.stratify_by] ?? '(blank)' : '(blank)'; };
+  const sdone = {}, stot = {};
+  for (const u of queue) { const k = stratumOf(u); stot[k] = (stot[k] || 0) + 1; if (stOf(u).done) sdone[k] = (sdone[k] || 0) + 1; }
+
+  const aside = h('aside', { class: 'vside' },
+    h('section', { class: 'card' },
+      frames.length > 1 ? h('label', { class: 'sel' }, 'Frame', h('select', { onchange: (e) => { V.frame = e.target.value; V.sampleId = null; V.unit = null; renderVerify(root); } }, frames.map((f) => h('option', { value: f.id, selected: f.id === frame.id, text: f.name })))) : h('h2', { text: frame.name }),
+      samples.length > 1 ? h('label', { class: 'sel' }, 'Sample', h('select', { onchange: (e) => { V.sampleId = e.target.value; V.unit = null; renderVerify(root); } }, samples.map((s) => h('option', { value: s.id, selected: s.id === sample.id, text: s.id })))) : null,
+      h('div', { class: 'big' }, h('b', { text: `${doneN} / ${queue.length}` }), h('span', { class: 'muted', text: ` verified by you (${pct(doneN, queue.length)})` })),
+      bar(queue.length ? doneN / queue.length : 0), unsureN ? h('div', { class: 'muted', text: `${unsureN} marked unsure` }) : null,
+      h('div', { class: 'lock muted', text: `Drawn ${sample.created.slice(0, 10)} by ${sample.created_by} · seed ${sample.seed} · ${Math.round(sample.fraction * 100)}% · locked` }),
+      h('button', { type: 'button', class: 'link', onclick: () => { V.sampleId = '__new'; V.draft = null; renderVerify(root); } }, 'Draw another sample')),
+    h('section', { class: 'card' }, h('h2', { text: 'Queue' }),
+      h('div', { class: 'pills' }, [['todo', 'To do'], ['unsure', 'Unsure'], ['done', 'Done'], ['all', 'All']].map(([k, l]) => h('button', { type: 'button', class: 'pill' + (V.filter === k ? ' on' : ''), onclick: () => { V.filter = k; V.unit = null; renderVerify(root); } }, l))),
+      h('div', { class: 'qlist' }, (() => { const a = shown.findIndex((u) => u.unit === cur.unit); const b = a >= 0 ? Math.max(0, a - 3) : Math.max(0, shown.findIndex((u) => queue.indexOf(u) > qi)); return shown.slice(b, b + 12); })().map((u) => {
+        const un = findUnit(u.doc, u.unit); const s = stOf(u);
+        return h('button', { type: 'button', class: 'qi' + (u.unit === cur.unit ? ' cur' : ''), onclick: () => goto(u) },
+          h('span', { class: 'qs ' + (s.done ? 'd' : Object.keys(s.fields).length ? 'p' : '') }), h('span', { class: 'qt' }, h('b', { class: 'mono', text: u.unit }), h('span', { text: ' ' + ((un && (un.label || un.text)) || '').slice(0, 60) })));
+      })), h('div', { class: 'muted', text: `${shown.length} shown` })),
+    h('section', { class: 'card' }, h('h2', { text: 'Sample by group' }),
+      strata.map(([k, s]) => h('div', { class: 'sg' }, h('div', { class: 'sgl' }, h('span', null, h('span', { class: 'dot', style: { background: colourFor(k) } }), ' ' + k), h('span', { class: 'mono muted', text: `${sdone[k] || 0}/${stot[k] || 0}` })), bar((stot[k] ? (sdone[k] || 0) / stot[k] : 0), colourFor(k)))))
+  );
+
+  // field rows
+  const rows = frame.fields.map((f, i) => {
+    const orig = codes[f.id] ?? null;
+    const e = st.fields[f.id];
+    const implicit = !e && orig == null && !f.required;
+    const bp = badParent(frame, f, codes, st);
+    const eff = effective(codes, st, f.id);
+    const sel = i === V.fieldIdx;
+    const btns = ACTIONS.map(([a, label, key]) => h('button', { type: 'button', class: 'act ' + a + (e && e.action === a ? ' on' : ''), disabled: (a === 'agree' && !!bp) || (a === 'disagree' && orig == null), title: `${label} (${key})`,
+      onclick: () => { V.fieldIdx = i; if (a === 'other') { V.picker = V.picker === f.id ? null : f.id; V.pickQ = ''; renderVerify(root); } else { V.picker = null; act(f, a); } } }, label, h('kbd', { text: key })));
+    let options = f.values;
+    if (f.depends_on) { const par = effective(codes, st, f.depends_on); options = f.values.filter((v) => !v.parent || v.parent === par); }
+    const q = V.pickQ.toLowerCase();
+    const pick = V.picker === f.id ? h('div', { class: 'picker' },
+      options.length > 10 ? h('input', { type: 'text', placeholder: 'Filter', value: V.pickQ, oninput: (ev) => { V.pickQ = ev.target.value; renderVerify(root); const el = root.querySelector('.picker input'); if (el) { el.focus(); el.setSelectionRange(V.pickQ.length, V.pickQ.length); } } }) : null,
+      options.length ? options.filter((v) => !q || (v.label + v.definition).toLowerCase().includes(q)).map((v) => h('button', { type: 'button', class: 'po' + (e && e.value === v.id ? ' on' : ''), onclick: () => { V.picker = null; act(f, 'other', v.id); } },
+        h('span', { class: 'dot', style: { background: colourFor(v.id) } }), h('b', { text: v.label }), h('span', { class: 'pd', text: v.definition || '' }))) : h('p', { class: 'muted', text: 'No values fit the chosen parent. Use Disagree.' }),
+      f.required ? null : h('div', { class: 'muted', text: 'To make this field blank, use Disagree.' })) : null;
+    const status = !e ? (implicit ? 'Blank, nothing to check' : 'Not checked') : e.action === 'agree' ? 'Agreed' : e.action === 'disagree' ? 'Disagreed: should be blank' : e.action === 'other' ? `Changed to ${e.value}` : 'Marked unsure';
+    return h('div', { class: 'frow' + (sel ? ' sel' : '') + (e ? ' ' + e.action : ''), onclick: () => { if (V.fieldIdx !== i) { V.fieldIdx = i; renderVerify(root); } } },
+      h('div', { class: 'fl' }, h('div', { class: 'fn' }, h('b', { text: f.label }), f.required ? null : h('span', { class: 'muted', text: ' optional' }),
+        h('button', { type: 'button', class: 'link', onclick: (ev) => { ev.stopPropagation(); openCodebook({ frame: frame.id, field: f.id, value: orig, tab: 'field' }); } }, 'Definitions')),
+        h('div', { class: 'fv' }, orig != null ? chip(orig, { onclick: (ev) => { ev.stopPropagation(); openCodebook({ frame: frame.id, field: f.id, value: orig, tab: 'field' }); } }) : h('span', { class: 'muted', text: '(blank)' }),
+          e && e.action === 'other' ? h('span', { class: 'arrow' }, '→ ', chip(e.value, { onclick: (ev) => { ev.stopPropagation(); openCodebook({ frame: frame.id, field: f.id, value: e.value, tab: 'field' }); } })) : null,
+          e && e.action === 'disagree' ? h('span', { class: 'arrow muted', text: '→ (blank)' }) : null),
+        orig != null && valueDef(frame.id, f.id, orig) && valueDef(frame.id, f.id, orig).definition ? h('div', { class: 'fd', text: valueDef(frame.id, f.id, orig).definition }) : null,
+        bp ? h('div', { class: 'warnline', text: bp + ' Choose Other or Disagree.' }) : null),
+      h('div', { class: 'fa' }, h('div', { class: 'acts' }, btns), h('div', { class: 'fs muted', text: status }), pick));
+  });
+
+  // first coder's memo and rationale stay hidden until the unit is done
+  const hidden = !st.done;
+  const claudeWhy = (() => { const raw = extras.raw && extras.raw[frame.id]; if (!raw) return []; return Object.entries(raw).filter(([, v]) => v && typeof v === 'object' && (v.why || v.conf != null)).map(([k, v]) => ({ k, why: v.why, conf: v.conf })); })();
+  const comments = commentsFor(events, cur.unit);
+  const myMemo = memoFor(events, { coder: S.handle, unit: cur.unit, frame: frame.id });
+
+  const ctx = (u, label) => u ? h('div', { class: 'ctx' }, h('span', { class: 'ctxl', text: label }), (u.text || u.label || '').slice(0, 400)) : null;
+  const card = h('section', { class: 'card ucard' },
+    h('div', { class: 'uh' },
+      h('div', null, h('div', { class: 'muted', text: `Unit ${qi + 1} of ${queue.length}` }), h('div', { class: 'mono', text: `${cur.doc} · ${cur.unit}${unit && unit.page ? ' · p. ' + unit.page : ''}` })),
+      h('div', { class: 'row' }, h('a', { href: `#/doc/${encodeURIComponent(cur.doc)}`, class: 'btn', text: 'Document profile' }),
+        h('button', { type: 'button', class: 'btn', disabled: !(doc && pdfParts(doc).some((x) => S.store.has(x.file))), title: doc && pdfParts(doc).some((x) => S.store.has(x.file)) ? '' : 'The PDF is not in the data repo yet', onclick: () => openPdf(doc, unit && unit.page) }, 'Open PDF'),
+        h('button', { type: 'button', class: 'btn', onclick: prev, disabled: qi <= 0 }, 'Previous'), h('button', { type: 'button', class: 'btn', onclick: next }, 'Skip'))),
+    h('div', { class: 'dt', text: doc ? doc.title : cur.doc }),
+    para ? ctx(list[ui - 1], 'Before') : null,
+    h('div', { class: 'passage' }, unit && unit.label && !para ? h('div', { class: 'plabel', text: unit.label }) : null, unit ? (unit.text || unit.label) : '(unit not found)'),
+    para ? ctx(list[ui + 1], 'After') : null,
+    unit && (unit.flags || []).includes('context-dependent') ? h('div', { class: 'warnline', text: 'This paragraph depends on its context. Read the neighbours before judging.' }) : null,
+    unit && unit.parent && doc ? h('div', { class: 'muted', text: 'Intervention: ' + (((doc.interventions || []).find((x) => x.id === unit.parent) || {}).name || unit.parent) }) : null,
+    h('div', { class: 'frows' }, rows),
+    h('div', { class: 'notes' },
+      h('div', null, h('b', { text: "First coder's notes" }), hidden ? h('div', { class: 'muted', text: 'Hidden until you finish this unit, so they cannot anchor your judgement.' }) :
+        h('div', null, extras.note ? h('p', { text: extras.note }) : h('p', { class: 'muted', text: 'No notes.' }), claudeWhy.map((c) => h('p', { class: 'muted', text: `${c.k}: ${c.conf != null ? 'confidence ' + c.conf + '. ' : ''}${c.why || ''}` })))),
+      h('label', null, h('b', { text: 'Your memo' }), h('textarea', { rows: 3, placeholder: 'Anything a second reader should know', value: myMemo, onblur: (ev) => { if (ev.target.value !== myMemo) addEvent(cur.doc, 'memo', { unit: cur.unit, frame: frame.id, text: ev.target.value }); } }, myMemo))),
+    h('div', { class: 'comments' }, h('b', { text: `Discussion (${comments.length})` }),
+      comments.map((c) => h('div', { class: 'cm' }, h('span', { class: 'cmw', text: c.coder }), h('span', { class: 'muted', text: ' ' + c.t.slice(0, 16).replace('T', ' ') }), h('div', { text: c.text }))),
+      h('div', { class: 'row' }, h('textarea', { rows: 2, placeholder: 'Comment for the whole team', id: 'newcomment' }), h('button', { type: 'button', class: 'btn', onclick: () => { const t = document.getElementById('newcomment'); if (t.value.trim()) { addEvent(cur.doc, 'comment', { unit: cur.unit, text: t.value.trim() }); } } }, 'Post'))),
+    h('div', { class: 'foot' },
+      st.done ? h('div', { class: 'row' }, h('span', { class: 'ok', text: 'Done' }), h('button', { type: 'button', class: 'btn', onclick: () => addEvent(cur.doc, 'reopen', { sample: sample.id, unit: cur.unit, frame: frame.id }) }, 'Reopen'), h('button', { type: 'button', class: 'btn primary', onclick: next }, 'Next unit'))
+        : h('div', { class: 'row' }, open.length > 1 ? h('button', { type: 'button', class: 'btn', title: 'Agree with every unchecked field (Shift+A)', onclick: () => agreeRest() }, 'Agree with all remaining') : null,
+          h('button', { type: 'button', class: 'btn primary', disabled: open.length > 0, onclick: () => { finish(); setTimeout(next, 0); } }, 'Done, next unit'),
+          open.length ? h('span', { class: 'muted', text: `${open.length} field${open.length > 1 ? 's' : ''} left: ${open.map((f) => f.label).join(', ')}` }) : null)));
+
+  root.replaceChildren(h('div', { class: 'vwrap' }, aside, h('div', { class: 'vmain' }, card)));
+
+  // keyboard
+  V.keys = (ev) => {
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName) || ev.metaKey || ev.ctrlKey || ev.altKey) return false;
+    const f = frame.fields[V.fieldIdx];
+    const k = ev.key.toLowerCase();
+    if (k === 'arrowdown') { V.fieldIdx = Math.min(frame.fields.length - 1, V.fieldIdx + 1); V.picker = null; renderVerify(root); }
+    else if (k === 'arrowup') { V.fieldIdx = Math.max(0, V.fieldIdx - 1); V.picker = null; renderVerify(root); }
+    else if (k === 'j') next(); else if (k === 'k') prev();
+    else if (k === 'a' && ev.shiftKey) agreeRest();
+    else if (k === 'a') { const e2 = ACTIONS[0]; if (!badParent(frame, f, codes, st)) act(f, e2[0]); }
+    else if (k === 'd') { if ((codes[f.id] ?? null) != null) act(f, 'disagree'); }
+    else if (k === 'u') act(f, 'unsure');
+    else if (k === 'o') { V.picker = V.picker === f.id ? null : f.id; V.pickQ = ''; renderVerify(root); }
+    else if (k === 'enter' && !st.done && open.length === 0) { finish(); setTimeout(next, 0); }
+    else if (k === 'escape') { if (V.picker) { V.picker = null; renderVerify(root); } else return false; }
+    else return false;
+    ev.preventDefault();
+    return true;
+  };
+}

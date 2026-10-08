@@ -1,0 +1,17 @@
+[
+ "codebook.md",
+ "documents/index.json",
+ "frames/attributes.json",
+ "frames/themes.json",
+ "layers/claude-demo/DEMO-A.json",
+ "layers/claude-demo/DEMO-B.json",
+ "layers/claude-demo/DEMO-C.json",
+ "layers/claude-demo/DEMO-D.json",
+ "layers/claude-demo/run.json",
+ "queries.json",
+ "review.json",
+ "units/DEMO-A.json",
+ "units/DEMO-B.json",
+ "units/DEMO-C.json",
+ "units/DEMO-D.json"
+]

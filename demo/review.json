@@ -1,0 +1,78 @@
+{
+ "schema": 1,
+ "id": "demo",
+ "title": "Demo: community gardens and wellbeing",
+ "subtitle": "Invented data. Nothing here is real.",
+ "unit": "paragraph",
+ "codebook": "codebook.md",
+ "codebook_version": "demo",
+ "questions": [
+  {
+   "id": "RQ1",
+   "text": "What helps people take part in community gardens?",
+   "frames": [
+    "themes"
+   ]
+  },
+  {
+   "id": "RQ2",
+   "text": "What changes do participants report?",
+   "frames": [
+    "themes",
+    "attributes"
+   ]
+  }
+ ],
+ "team": [
+  {
+   "handle": "demo-coder",
+   "name": "You",
+   "role": "Second coder"
+  }
+ ],
+ "links": [],
+ "milestones": [
+  {
+   "date": null,
+   "label": "Try the demo",
+   "done": true
+  }
+ ],
+ "prisma": {
+  "identified": 120,
+  "screened": 120,
+  "sought": 14,
+  "assessed": 12,
+  "excluded": [
+   {
+    "reason": "Wrong population",
+    "n": 5
+   },
+   {
+    "reason": "Not a review document",
+    "n": 3
+   }
+  ],
+  "included": 4
+ },
+ "frames": [
+  "themes",
+  "attributes"
+ ],
+ "layers": [
+  {
+   "id": "claude-demo",
+   "label": "Claude (demo)",
+   "kind": "claude",
+   "frames": [
+    "themes",
+    "attributes"
+   ]
+  }
+ ],
+ "first_layer": "claude-demo",
+ "sampling": {
+  "fraction": 0.15,
+  "min_per_stratum": 2
+ }
+}
