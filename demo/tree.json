@@ -1,5 +1,9 @@
 [
  "codebook.md",
+ "documents/DEMO-A.pages.json",
+ "documents/DEMO-B.pages.json",
+ "documents/DEMO-C.pages.json",
+ "documents/DEMO-D.pages.json",
  "documents/index.json",
  "frames/attributes.json",
  "frames/themes.json",

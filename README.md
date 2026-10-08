@@ -4,4 +4,4 @@ Static web app for evidence reviews: code and verify documents, screen full text
 
 This repository holds the built app and an invented demo project only. It holds no review data.
 
-Built from the private source repository at commit 26a9927.
+Built from the private source repository at commit 9bfad3c.
