@@ -67,21 +67,23 @@ function screenCard() {
   const coders = [...new Set(all.map((p) => p.coder))];
   const fmt = (x) => (x == null ? 'n/a' : x.toFixed(2));
   return h('section', { class: 'card wide' }, h('h2', { text: 'Full-text screening' }),
-    h('p', { class: 'muted', text: `${cfg.blind ? 'Blinded' : 'Open'} full-text screening against the first screen (${S.firstScreen.name || S.firstScreen.screener}). ${S.records.length} records.` }),
+    h('p', { class: 'muted', text: `${cfg.blind ? 'Blinded' : 'Open'} full-text screening against the first screen (${S.firstScreen.name || S.firstScreen.screener}). ${S.records.length} records.${cfg.blind ? ' Agreement uses each screener\'s judgements and decision as they stood before the first screen was shown.' : ''}` }),
     !coders.length ? h('p', { class: 'muted', text: 'No screening decisions yet.' }) : coders.map((c) => {
       const ps = all.filter((p) => p.coder === c);
       const dec = ps.filter((p) => p.decision && p.decision !== 'discuss');
       const k = cohenKappa(dec.map((p) => [p.first, p.decision]));
       const disc = ps.filter((p) => p.decision === 'discuss');
       const diff = ps.filter((p) => p.decision && (p.decision !== p.first || (p.decision === 'exclude' && p.reason !== p.firstReason)));
-      const crit = (cfg.criteria || []).map((cr) => { const xs = ps.map((p) => p.crit.find((x) => x.id === cr.id)).filter((x) => x && x.action && x.action !== 'unsure'); const ag = xs.filter((x) => x.action === 'agree').length; return [cr.label, xs.length, ag]; });
+      const crit = (cfg.criteria || []).map((cr) => { const xs = ps.map((p) => p.crit.find((x) => x.id === cr.id)).filter((x) => x && x.value); const ck = cohenKappa(xs.map((x) => [x.first, x.value])); return [cr.label, xs.length, xs.filter((x) => x.value === x.first).length, ck.kappa]; });
+      const changed = ps.filter((p) => p.changed);
       return h('div', null, h('h3', { text: c }),
-        h('p', null, `${ps.filter((p) => p.decision).length} of ${S.records.length} decided. Include or exclude: `, h('b', { text: dec.length ? `${pct(Math.round(k.agreement * k.n), k.n)} agreement, Cohen's kappa ${fmt(k.kappa)}` : 'none yet' }), dec.length ? ` over ${k.n} records.` : '', disc.length ? ` ${disc.length} sent to discussion.` : ''),
-        h('table', { class: 't' }, h('thead', null, h('tr', null, ['Criterion', 'Points checked', 'Agreed with first screen'].map((x) => h('th', { text: x })))),
-          h('tbody', null, crit.map(([l, n, a]) => h('tr', null, h('td', { text: l }), h('td', { class: 'mono', text: n }), h('td', { class: 'mono', text: n ? pct(a, n) : '-' }))))),
+        h('p', null, `${ps.filter((p) => p.decision).length} of ${S.records.length} decided. Include or exclude${cfg.blind ? ', decided before the first screen was shown' : ''}: `, h('b', { text: dec.length ? `${pct(Math.round(k.agreement * k.n), k.n)} agreement, Cohen's kappa ${fmt(k.kappa)}` : 'none yet' }), dec.length ? ` over ${k.n} records.` : '', disc.length ? ` ${disc.length} sent to discussion.` : ''),
+        cfg.blind && changed.length ? h('p', { class: 'muted', text: `${changed.length} decision${changed.length > 1 ? 's' : ''} changed after the first screen was shown: ${changed.map((p) => p.rec).join(', ')}.` }) : null,
+        h('table', { class: 't' }, h('thead', null, h('tr', null, ['Criterion', 'Judged', 'Same as first screen', "Cohen's kappa"].map((x) => h('th', { text: x })))),
+          h('tbody', null, crit.map(([l, n, a, kk]) => h('tr', null, h('td', { text: l }), h('td', { class: 'mono', text: n }), h('td', { class: 'mono', text: n ? pct(a, n) : '-' }), h('td', { class: 'mono', text: n ? fmt(kk) : '-' }))))),
         h('h3', { text: `Differ from the first screen (${diff.length})` }),
-        diff.length ? h('table', { class: 't' }, h('thead', null, h('tr', null, ['Record', 'First screen', c, ''].map((x) => h('th', { text: x })))),
-          h('tbody', null, diff.map((p) => h('tr', null, h('td', { class: 'mono', text: p.rec }), h('td', { text: p.first + (p.firstReason ? ` (${p.firstReason})` : '') }), h('td', { text: p.decision + (p.reason ? ` (${p.reason})` : '') }),
+        diff.length ? h('table', { class: 't' }, h('thead', null, h('tr', null, ['Record', 'First screen', c, cfg.blind ? 'Now' : '', ''].map((x) => h('th', { text: x })))),
+          h('tbody', null, diff.map((p) => h('tr', null, h('td', { class: 'mono', text: p.rec }), h('td', { text: p.first + (p.firstReason ? ` (${p.firstReason})` : '') }), h('td', { text: p.decision + (p.reason ? ` (${p.reason})` : '') }), h('td', { text: cfg.blind && p.final ? p.final + (p.finalReason ? ` (${p.finalReason})` : '') : '' }),
             h('td', null, h('a', { href: '#/screen', onclick: () => { SC.rec = p.rec; SC.filter = 'all'; }, text: 'Open' })))))) : h('p', { class: 'muted', text: 'None.' }));
     }));
 }

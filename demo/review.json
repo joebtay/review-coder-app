@@ -78,8 +78,8 @@
  "screening": {
   "enabled": true,
   "stage": "full-text",
-  "blind": false,
-  "note": "Open full-text screening: you see the full text and the first screener's notes, agree or disagree with each point, then decide.",
+  "blind": true,
+  "note": "Blinded full-text screening: judge each criterion and decide from the full text with the first screen hidden. Saving your decision shows the first screen beside yours.",
   "records": "screening/records.json",
   "first": "screening/first-screen.json",
   "criteria": [

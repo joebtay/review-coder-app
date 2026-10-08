@@ -100,3 +100,5 @@ mark.frag.ghost{background:none;border-bottom:1px dotted #a7afbc;cursor:default}
 .rmeta{margin:8px 4px}.rmeta div{margin:2px 0}.rulings,.firstdec,.mydec{margin:12px 4px}.ruling{font-size:13.5px;margin:4px 0}.dec.include{color:#0b7a53}.dec.exclude{color:#b3261e}.dec.discuss{color:#7a4a00}
 .mydec{border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:#fbfcfe}.mydec h3{margin-top:0}.mydec .sel{margin-top:10px}.mydec textarea{width:100%;margin-top:4px}
 .dtasks .tlist>h3{margin:12px 4px 4px}
+.act.judge.on{background:var(--j);color:#fff;border-color:transparent}.task.crit.judged{background:#fbfcfe}
+.blindnote{margin:8px 4px;padding:8px 12px;border-radius:8px;background:#eef3fb;border:1px solid #c9d6ea;font-size:13.5px;color:var(--ink2)}
