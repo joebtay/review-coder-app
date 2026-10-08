@@ -114,7 +114,7 @@ export async function openPdf(d, page) {
   const w = window.open('', '_blank');
   try {
     const parts = pdfParts(d).filter((x) => S.store.has(x.file));
-    const n = parseInt(page, 10);
+    const n = parseInt(String(page ?? '').replace(/^(e|pp?\.\s*)/i, ''), 10); // e-pages (e23) count as 23
     const part = (Number.isFinite(n) && parts.find((x) => n >= x.from && (x.to === null || n <= x.to))) || parts[0];
     const local = Number.isFinite(n) ? n - part.from + 1 : null;
     const blob = await S.store.readBlob(part.file);
