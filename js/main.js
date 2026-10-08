@@ -5,6 +5,7 @@ import { mountCodebook, toggleCodebook, render as renderCodebook } from './codeb
 import { renderProject } from './project.js';
 import { renderDocuments, renderDocProfile } from './documents.js';
 import { renderVerify, V } from './verify.js';
+import { renderScreen, SC } from './screen.js';
 import { renderAgreement } from './agreement.js';
 
 const NAV = [['project', 'Project'], ['documents', 'Documents'], ['screen', 'Screen'], ['code', 'Code'], ['verify', 'Verify'], ['agreement', 'Agreement'], ['overview', 'Overview']];
@@ -113,10 +114,11 @@ function route() {
   else if (page === 'documents') renderDocuments(main);
   else if (page === 'doc') renderDocProfile(main, decodeURIComponent(parts[1] || ''));
   else if (page === 'verify') renderVerify(main);
+  else if (page === 'screen') renderScreen(main);
   else if (page === 'agreement') renderAgreement(main);
   else main.replaceChildren(h('div', { class: 'page' }, h('h1', { text: NAV.find((n) => n[0] === page)?.[1] || 'Not found' }), h('p', { class: 'muted', text: page === 'overview' ? 'The matrix and audit trail arrive in stage 4.' : 'This module arrives in stage 5.' })));
   renderCodebook(true);
-  if (page !== 'verify') window.scrollTo(0, y);
+  if (page !== 'verify' && page !== 'screen') window.scrollTo(0, y);
 }
 window.addEventListener('hashchange', () => { if (main) { route(); window.scrollTo(0, 0); } });
 
@@ -125,6 +127,7 @@ document.addEventListener('keydown', (e) => {
   if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
   if (e.key === '?') { toggleCodebook(); e.preventDefault(); return; }
   if ((location.hash.startsWith('#/verify')) && V.keys) V.keys(e);
+  else if (location.hash.startsWith('#/screen') && SC.keys) SC.keys(e);
 });
 
 const c = cfg();

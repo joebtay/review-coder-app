@@ -28,3 +28,17 @@ export function alphaNominal(pairs) {
   const alpha = De === 0 ? (Do === 0 ? 1 : null) : 1 - Do / De;
   return { alpha, n: N, agreement: same / N };
 }
+
+/** Cohen's kappa for two raters. pairs: array of [a, b]. */
+export function cohenKappa(pairs) {
+  const N = pairs.length;
+  if (!N) return { kappa: null, n: 0, agreement: null };
+  const ca = new Map(), cb = new Map();
+  let same = 0;
+  for (const [x, y] of pairs) { const a = cat(x), b = cat(y); ca.set(a, (ca.get(a) || 0) + 1); cb.set(b, (cb.get(b) || 0) + 1); if (a === b) same++; }
+  const po = same / N;
+  let pe = 0;
+  for (const [k, v] of ca) pe += (v / N) * ((cb.get(k) || 0) / N);
+  const kappa = pe === 1 ? (po === 1 ? 1 : null) : (po - pe) / (1 - pe);
+  return { kappa, n: N, agreement: po };
+}

@@ -28,6 +28,12 @@ export async function loadReview(store, handle) {
   S.docs = store.has('documents/index.json') ? await store.readJSON('documents/index.json') : [];
   S.docById = new Map(S.docs.map((d) => [d.id, d]));
   S.queries = store.has('queries.json') ? await store.readJSON('queries.json') : [];
+  const sc = S.review.screening;
+  S.records = null; S.firstScreen = null;
+  if (sc && sc.enabled) {
+    S.records = sc.records && store.has(sc.records) ? await store.readJSON(sc.records) : [];
+    S.firstScreen = sc.first && store.has(sc.first) ? await store.readJSON(sc.first) : { records: {} };
+  }
   S.sync = new Sync(store, handle, (st) => { S.syncStatus = st; notifyStatus(); });
   notify();
   loadRest().catch((e) => { S.loadError = e; notify(); });

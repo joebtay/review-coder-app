@@ -1,5 +1,6 @@
 import { S, allEvents, firstCodes, findUnit } from './data.js';
-import { alphaNominal } from './stats.js';
+import { alphaNominal, cohenKappa } from './stats.js';
+import { screenPairs, SC } from './screen.js';
 import { h, chip, pct } from './ui.js';
 import { openCodebook } from './codebook.js';
 import { V } from './verify.js';
@@ -32,6 +33,7 @@ export function renderAgreement(root) {
   const body = [];
   if (!S.ready) body.push(h('p', { class: 'muted', text: `Loading ${S.loading.done} of ${S.loading.total} files` }));
   else if (!frames.length) body.push(h('p', { class: 'muted', text: 'No sample has been drawn yet. Draw one on the Verify screen.' }));
+  if (S.ready && S.review.screening && S.review.screening.enabled && S.records) body.unshift(screenCard());
   for (const fr of S.ready ? frames : []) {
     const pairs = collectPairs(fr);
     const all = alphaNominal(pairs.map((p) => [p.a, p.b]));
@@ -56,4 +58,30 @@ export function renderAgreement(root) {
         h('p', { class: 'muted', text: 'Consensus decisions arrive in the next stage.' }))));
   }
   root.replaceChildren(h('div', { class: 'page' }, h('div', { class: 'ph' }, h('h1', { text: 'Agreement' }), h('div', { class: 'muted', text: 'First coder against verifier, from finished units only' })), body));
+}
+
+/** Full-text screening: each screener's decisions against the first screen. */
+function screenCard() {
+  const cfg = S.review.screening;
+  const all = screenPairs();
+  const coders = [...new Set(all.map((p) => p.coder))];
+  const fmt = (x) => (x == null ? 'n/a' : x.toFixed(2));
+  return h('section', { class: 'card wide' }, h('h2', { text: 'Full-text screening' }),
+    h('p', { class: 'muted', text: `${cfg.blind ? 'Blinded' : 'Open'} full-text screening against the first screen (${S.firstScreen.name || S.firstScreen.screener}). ${S.records.length} records.` }),
+    !coders.length ? h('p', { class: 'muted', text: 'No screening decisions yet.' }) : coders.map((c) => {
+      const ps = all.filter((p) => p.coder === c);
+      const dec = ps.filter((p) => p.decision && p.decision !== 'discuss');
+      const k = cohenKappa(dec.map((p) => [p.first, p.decision]));
+      const disc = ps.filter((p) => p.decision === 'discuss');
+      const diff = ps.filter((p) => p.decision && (p.decision !== p.first || (p.decision === 'exclude' && p.reason !== p.firstReason)));
+      const crit = (cfg.criteria || []).map((cr) => { const xs = ps.map((p) => p.crit.find((x) => x.id === cr.id)).filter((x) => x && x.action && x.action !== 'unsure'); const ag = xs.filter((x) => x.action === 'agree').length; return [cr.label, xs.length, ag]; });
+      return h('div', null, h('h3', { text: c }),
+        h('p', null, `${ps.filter((p) => p.decision).length} of ${S.records.length} decided. Include or exclude: `, h('b', { text: dec.length ? `${pct(Math.round(k.agreement * k.n), k.n)} agreement, Cohen's kappa ${fmt(k.kappa)}` : 'none yet' }), dec.length ? ` over ${k.n} records.` : '', disc.length ? ` ${disc.length} sent to discussion.` : ''),
+        h('table', { class: 't' }, h('thead', null, h('tr', null, ['Criterion', 'Points checked', 'Agreed with first screen'].map((x) => h('th', { text: x })))),
+          h('tbody', null, crit.map(([l, n, a]) => h('tr', null, h('td', { text: l }), h('td', { class: 'mono', text: n }), h('td', { class: 'mono', text: n ? pct(a, n) : '-' }))))),
+        h('h3', { text: `Differ from the first screen (${diff.length})` }),
+        diff.length ? h('table', { class: 't' }, h('thead', null, h('tr', null, ['Record', 'First screen', c, ''].map((x) => h('th', { text: x })))),
+          h('tbody', null, diff.map((p) => h('tr', null, h('td', { class: 'mono', text: p.rec }), h('td', { text: p.first + (p.firstReason ? ` (${p.firstReason})` : '') }), h('td', { text: p.decision + (p.reason ? ` (${p.reason})` : '') }),
+            h('td', null, h('a', { href: '#/screen', onclick: () => { SC.rec = p.rec; SC.filter = 'all'; }, text: 'Open' })))))) : h('p', { class: 'muted', text: 'None.' }));
+    }));
 }

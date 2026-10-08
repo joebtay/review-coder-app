@@ -3,11 +3,10 @@
 import { S, docEvents, addEvent, firstCodes, firstExtras, unitList, findUnit, notify } from './data.js';
 import { memoFor, commentsFor } from './events.js';
 import { h, colourFor, bar, pct } from './ui.js';
-import { pdfParts } from './documents.js';
+import { textPane, whereText, saveScroll, restoreScroll } from './fulltext.js';
 import { V, renderVerify, modeBar, verifiableFrames, indexMine, unresolved, badParent, fieldRows, docOrder, currentSample } from './verify.js';
-import { snippetsFor, findSpans, pageRefs, segments } from './match.js';
 
-export const D = { doc: null, task: null, fidx: 0, tab: null, filter: 'todo', pages: new Map(), failed: new Set(), pdf: new Map(), scroll: null, keep: null };
+export const D = { doc: null, task: null, fidx: 0, tab: null, filter: 'todo', scroll: null, keep: null };
 
 /** For each verifiable frame, its current sample: the same one the fragment view uses. */
 function activeSamples() {
@@ -36,54 +35,6 @@ function buildTasks(active) {
   return { byDoc, docs };
 }
 
-function loadPages(doc) {
-  const path = `documents/${doc}.pages.json`;
-  if (D.pages.has(doc) || D.failed.has(doc) || !S.store.has(path)) return;
-  D.pages.set(doc, null);
-  S.store.readJSON(path).then((x) => { D.pages.set(doc, x.pages || []); notify(); }).catch(() => { D.pages.delete(doc); D.failed.add(doc); notify(); });
-}
-
-function hasPdf(d) { return d && pdfParts(d).some((x) => S.store.has(x.file)); }
-
-/** PDF part and page within it for a printed page number. */
-function pdfTarget(d, page) {
-  const parts = pdfParts(d).filter((x) => S.store.has(x.file));
-  const n = parseInt(String(page ?? '').replace(/^(e|pp?\.\s*)/i, ''), 10);
-  const part = (Number.isFinite(n) && parts.find((x) => n >= x.from && (x.to === null || n <= x.to))) || parts[0];
-  return part ? { file: part.file, local: Number.isFinite(n) ? n - part.from + 1 : null } : null;
-}
-
-function pdfUrl(file) {
-  if (D.pdf.has(file)) return D.pdf.get(file);
-  D.pdf.set(file, null);
-  S.store.readBlob(file).then((b) => { D.pdf.set(file, URL.createObjectURL(new Blob([b], { type: 'application/pdf' }))); notify(); }).catch(() => { D.pdf.delete(file); });
-  return null;
-}
-
-const pageNum = (label) => parseInt(String(label ?? '').replace(/^e/i, ''), 10);
-
-/** Where each unit sits in the text: highlighted spans per page, and the pages it cites. */
-function locate(doc, pages, units) {
-  const spans = new Map(); // page index -> [{start,end,key}]
-  const cites = new Map(); // page index -> Set(unit id)
-  const found = new Map(); // unit id -> {marks, pages:Set(page index)}
-  const L = S.layers.get(S.review.first_layer)?.get(doc);
-  for (const u of units) {
-    const quotes = [];
-    const raw = L?.codes?.[u.id];
-    if (raw) for (const fr of Object.values(raw)) for (const v of Object.values(fr || {})) if (v && typeof v === 'object' && v.quote) quotes.push(v.quote);
-    const snips = snippetsFor(u, quotes);
-    const refs = new Set(pageRefs(`${u.page ? 'p.' + u.page : ''} ${u.text || ''}`));
-    const rec = { marks: 0, pages: new Set() };
-    pages.forEach((p, i) => {
-      if (snips.length) for (const s of findSpans(p.text, snips)) { if (!spans.has(i)) spans.set(i, []); spans.get(i).push({ ...s, key: u.id }); rec.marks++; rec.pages.add(i); }
-      if (refs.has(pageNum(p.label))) { if (!cites.has(i)) cites.set(i, new Set()); cites.get(i).add(u.id); rec.pages.add(i); }
-    });
-    found.set(u.id, rec);
-  }
-  return { spans, cites, found };
-}
-
 export function renderDocView(root) {
   const rr = () => renderVerify(root);
   if (!S.ready) { root.replaceChildren(modeBar(root), h('div', { class: 'page' }, h('p', { class: 'muted', text: `Loading ${S.loading.done} of ${S.loading.total} files` }))); return; }
@@ -104,14 +55,17 @@ export function renderDocView(root) {
   let cur = tasks.find((t) => t.key === D.task);
   if (!cur) { cur = tasks.find((t) => !done(t)) || tasks[0]; D.task = cur.key; D.fidx = 0; D.scroll = cur.unit; }
   const ti = tasks.indexOf(cur);
-  loadPages(D.doc);
-  const pages = D.pages.get(D.doc);
-  if (!D.tab) D.tab = 'text';
-  const tab = D.tab === 'text' && !S.store.has(`documents/${D.doc}.pages.json`) && hasPdf(doc) ? 'pdf' : D.tab;
-
   // every coded fragment in the document, so ones outside the sample still show (faintly) for context
-  const units = unitList(D.doc).filter((u) => !u.excluded && active.some(({ frame }) => firstCodes(D.doc, u.id, frame.id)));
-  const loc = pages ? locate(D.doc, pages, units) : null;
+  const L = S.layers.get(S.review.first_layer)?.get(D.doc);
+  const asItem = (u) => {
+    const quotes = [];
+    const raw = L?.codes?.[u.id];
+    if (raw) for (const fr of Object.values(raw)) for (const v of Object.values(fr || {})) if (v && typeof v === 'object' && v.quote) quotes.push(v.quote);
+    return { key: u.id, label: u.label || u.id, text: u.text, page: u.page, kind: u.kind, quotes };
+  };
+  const taskUnits = new Set(tasks.map((t) => t.unit));
+  const coded = unitList(D.doc).filter((u) => !u.excluded && active.some(({ frame }) => firstCodes(D.doc, u.id, frame.id)));
+  const unitTask = new Map(); for (const t of tasks) if (!unitTask.has(t.unit)) unitTask.set(t.unit, t);
 
   const select = (t, scroll = true) => { D.task = t.key; D.fidx = 0; V.picker = null; if (scroll) D.scroll = t.unit; rr(); };
   const nextTodo = () => tasks.slice(ti + 1).find((t) => !done(t)) || tasks.find((t) => !done(t) && t !== cur) || null;
@@ -141,50 +95,18 @@ export function renderDocView(root) {
       h('button', { type: 'button', class: 'link', onclick: () => { V.sampleId = '__new'; V.draft = null; rr(); } }, 'Draw another sample')));
 
   // ----- full text
-  const selUnit = cur.unit;
-  let textBody;
-  if (tab === 'pdf') {
-    const tgt = hasPdf(doc) ? pdfTarget(doc, (findUnit(cur.doc, cur.unit) || {}).page || (loc && loc.found.get(cur.unit)?.pages.size ? pages[[...loc.found.get(cur.unit).pages][0]].label : null)) : null;
-    const url = tgt ? pdfUrl(tgt.file) : null;
-    textBody = !tgt ? h('p', { class: 'muted', text: 'The PDF is not in the data repo yet.' }) : !url ? h('p', { class: 'muted', text: 'Loading the PDF' })
-      : h('iframe', { class: 'pdfv', src: url + (tgt.local ? `#page=${tgt.local}` : ''), title: 'Full text' });
-  } else if (!S.store.has(`documents/${D.doc}.pages.json`)) {
-    textBody = h('p', { class: 'muted', text: 'No text version of this document yet. Use the PDF tab.' });
-  } else if (!pages) {
-    textBody = h('p', { class: 'muted', text: D.failed.has(D.doc) ? 'Could not load the text.' : 'Loading the text' });
-  } else {
-    const unitTask = new Map(); for (const t of tasks) if (!unitTask.has(t.unit)) unitTask.set(t.unit, t);
-    const labelOf = (id) => { const u = findUnit(D.doc, id); return (u && (u.label || u.id)) || id; };
-    textBody = pages.map((p, i) => {
-      const sp = loc.spans.get(i) || [];
-      const ci = [...(loc.cites.get(i) || [])].filter((id) => unitTask.has(id));
-      const segs = segments(p.text.length, sp);
-      const hot = ci.includes(selUnit) || sp.some((s) => s.key === selUnit);
-      return h('section', { class: 'pg' + (hot ? ' hot' : ''), 'data-pg': i },
-        h('div', { class: 'pgh' }, h('span', { class: 'mono', text: `p. ${p.label}` }),
-          ci.length ? h('span', { class: 'cites' }, h('span', { class: 'muted', text: 'cited by ' }), ci.map((id) => h('button', { type: 'button', class: 'cite' + (id === selUnit ? ' on' : ''), style: { '--c': colourFor(labelOf(id)) }, onclick: () => { const t = unitTask.get(id); if (t) select(t, false); } }, labelOf(id)))) : null),
-        h('div', { class: 'pgt' }, segs.map((g) => {
-          const txt = p.text.slice(g.start, g.end);
-          if (!g.keys.length) return txt;
-          const live = g.keys.filter((k) => unitTask.has(k));
-          if (!live.length) return h('mark', { class: 'frag ghost', title: 'Coded, not in this sample: ' + g.keys.map(labelOf).join(', ') }, txt);
-          const on = live.includes(selUnit);
-          return h('mark', { class: 'frag' + (on ? ' on' : ''), 'data-u': live.join(' '), title: live.map(labelOf).join(', '), style: { '--c': colourFor(labelOf(live[0])) }, onclick: () => { const t = unitTask.get(on ? selUnit : live[0]); if (t) select(t, false); } }, txt);
-        })));
-    });
-  }
-  const textCard = h('section', { class: 'card dtext' },
-    h('div', { class: 'dth' }, h('div', null, h('div', { class: 'mono muted', text: `${D.doc}${doc && doc.year ? ' · ' + doc.year : ''}` }), h('div', { class: 'dt', text: doc ? doc.title : D.doc })),
-      h('div', { class: 'seg' }, [['text', 'Text'], ['pdf', 'PDF']].map(([k, l]) => h('button', { type: 'button', class: tab === k ? 'on' : '', disabled: k === 'pdf' && !hasPdf(doc), onclick: () => { D.tab = k; D.scroll = cur.unit; rr(); } }, l)))),
-    h('div', { class: 'dtb' + (tab === 'pdf' ? ' pdf' : '') }, textBody));
+  const pane = textPane({ doc, id: D.doc, title: doc ? doc.title : D.doc, sub: `${D.doc}${doc && doc.year ? ' \u00b7 ' + doc.year : ''}`,
+    items: coded.filter((u) => taskUnits.has(u.id)).map(asItem), ghosts: coded.filter((u) => !taskUnits.has(u.id)).map(asItem),
+    sel: cur.unit, onSelect: (k) => { const t = unitTask.get(k); if (t) select(t, false); }, tab: D.tab, setTab: (k) => { D.tab = k; D.scroll = cur.unit; rr(); }, scrollTo: D.scroll });
+  const { pages, loc } = pane;
+  const textCard = pane.el;
 
   // ----- fragments
   const events = docEvents(D.doc);
   const taskCard = (t, i) => {
     const u = findUnit(t.doc, t.unit);
     const isCur = t === cur;
-    const f = loc && loc.found.get(t.unit);
-    const where = !pages ? '' : f && f.marks ? `${f.marks} highlight${f.marks > 1 ? 's' : ''} in the text` : f && f.pages.size ? `cited on p. ${[...f.pages].map((k) => pages[k].label).join(', ')}` : 'not located in the text';
+    const where = whereText(pages, loc, t.unit);
     const nf = Object.keys(t.st.fields).length;
     const head = h('button', { type: 'button', class: 'th', onclick: () => select(t) },
       h('span', { class: 'qs ' + (t.st.done ? 'd' : nf ? 'p' : '') }),
@@ -229,20 +151,12 @@ export function renderDocView(root) {
     h('div', { class: 'tlist' }, tasks.map(taskCard)));
 
   // keep scroll positions across re-renders
-  const prevText = root.querySelector('.dtb'); const prevList = root.querySelector('.tlist');
-  const keep = { text: prevText ? prevText.scrollTop : 0, list: prevList ? prevList.scrollTop : 0, doc: D.keep && D.keep.doc };
+  const saved = saveScroll(root, ['.dtb', '.tlist']);
   root.replaceChildren(modeBar(root), h('div', { class: 'dwrap' }, aside, textCard, taskPanel));
-  const tb = root.querySelector('.dtb'); const tl = root.querySelector('.tlist');
-  if (keep.doc === D.doc) { if (tb) tb.scrollTop = keep.text; if (tl) tl.scrollTop = keep.list; }
+  if (D.keep && D.keep.doc === D.doc) restoreScroll(root, saved);
   D.keep = { doc: D.doc };
-  if (D.scroll && tab === 'text' && pages && tb) {
-    const id = D.scroll;
-    const m = [...tb.querySelectorAll('mark.frag[data-u]')].find((x) => x.dataset.u.split(' ').includes(id));
-    const f = loc.found.get(id);
-    const target = m || (f && f.pages.size ? tb.querySelector(`.pg[data-pg="${[...f.pages][0]}"]`) : null);
-    if (target) tb.scrollTop = Math.max(0, target.offsetTop - tb.offsetTop - 80);
-    D.scroll = null;
-  } else if (D.scroll && tab !== 'text') D.scroll = null;
+  if (D.scroll) { pane.after(root); D.scroll = null; }
+  const tl = root.querySelector('.tlist');
   const c = tl && tl.querySelector('.task.cur');
   if (c && (c.offsetTop < tl.scrollTop || c.offsetTop > tl.scrollTop + tl.clientHeight - 60)) tl.scrollTop = Math.max(0, c.offsetTop - tl.offsetTop - 8);
 
