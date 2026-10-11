@@ -39,7 +39,8 @@ export const pct = (n, d) => (d ? `${Math.round((100 * n) / d)}%` : '0%');
 
 export function mdToHtml(src) {
   const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const inline = (s) => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<i>$2</i>');
+  // Markdown escapes such as "1\." (written by some editors) show as the plain character.
+  const inline = (s) => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<i>$2</i>').replace(/\\([.\-#()[\]!+_|])/g, '$1');
   const lines = src.split('\n');
   const out = [];
   let i = 0, list = null;
@@ -47,7 +48,13 @@ export function mdToHtml(src) {
   while (i < lines.length) {
     const l = lines[i];
     let m;
-    if ((m = /^(#{1,4})\s+(.*)$/.exec(l))) {
+    if (/^```/.test(l)) { // fenced block: shown as written, for small diagrams
+      closeList();
+      const body = [];
+      i++;
+      while (i < lines.length && !/^```/.test(lines[i])) body.push(esc(lines[i++]));
+      out.push(`<pre>${body.join('\n')}</pre>`);
+    } else if ((m = /^(#{1,4})\s+(.*)$/.exec(l))) {
       closeList();
       const id = 'h-' + m[2].toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
       out.push(`<h${m[1].length + 1} id="${id}" data-h="${esc(m[2])}">${inline(m[2])}</h${m[1].length + 1}>`);
@@ -59,13 +66,19 @@ export function mdToHtml(src) {
       while (i < lines.length && /^\|/.test(lines[i])) { out.push('<tr>' + cells(lines[i]).map((c) => `<td>${inline(c)}</td>`).join('') + '</tr>'); i++; }
       out.push('</tbody></table>');
       continue;
+    } else if ((m = /^>\s?(.*)$/.exec(l))) {
+      closeList();
+      out.push(`<blockquote>${inline(m[1])}</blockquote>`);
     } else if ((m = /^\s*[-*]\s+(.*)$/.exec(l))) {
       if (list !== 'ul') { closeList(); out.push('<ul>'); list = 'ul'; }
       out.push(`<li>${inline(m[1])}</li>`);
     } else if ((m = /^\s*\d+\.\s+(.*)$/.exec(l))) {
       if (list !== 'ol') { closeList(); out.push('<ol>'); list = 'ol'; }
       out.push(`<li>${inline(m[1])}</li>`);
-    } else if (l.trim() === '') {
+    } else if (/^---+\s*$/.test(l)) {
+      closeList();
+      out.push('<hr>');
+    } else if (l.trim() === '' || l.trim() === '&nbsp;') {
       closeList();
     } else {
       closeList();

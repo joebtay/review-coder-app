@@ -82,6 +82,9 @@ export class GitHubStore {
   async readFile(path) {
     try {
       const j = await (await this.req('GET', `/repos/${this.repo}/contents/${encPath(path)}?ref=${this.branch}`)).json();
+      // over 1 MB GitHub sends no content (encoding "none"): fetch the raw file. If it changed in
+      // between, the write with this sha fails with 409 and the caller re-reads.
+      if (j.encoding !== 'base64') return { text: await this.readText(path), sha: j.sha };
       return { text: dec(j.content || ''), sha: j.sha };
     } catch (e) {
       if (e.status === 404) return null;

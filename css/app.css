@@ -42,7 +42,7 @@ table.t{width:100%;border-collapse:collapse;font-size:14px}.t th{text-align:left
 .kv{display:flex;gap:12px;padding:4px 0;border-bottom:1px solid #f0f2f6}.kv .k{flex:0 0 110px;color:var(--muted);font-size:13px}.kv span:last-child,.kv a{min-width:0;overflow-wrap:anywhere}
 .int h3{border-top:1px solid var(--line);padding-top:12px}.unit{padding:8px 0}.ut{font-family:"IBM Plex Serif",Georgia,serif;color:var(--ink2);margin:2px 0 4px;max-width:90ch}.chips{display:flex;flex-wrap:wrap}
 .form{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:12px}.form label,.sel{font-size:12px;color:var(--muted);display:block}.form input,.form select,.sel select{margin-top:4px;font-size:14px}
-.signin{max-width:460px;margin:8vh auto;padding:0 20px}.signin label{display:block;margin:12px 0;font-size:13px;color:var(--muted)}.signin input[type=text],.signin input[type=password]{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:6px;margin-top:4px;font-size:14px}.signin label.inline{display:flex;gap:6px;align-items:center}
+.signin{max-width:460px;margin:8vh auto;padding:0 20px}.signin label{display:block;margin:12px 0;font-size:13px;color:var(--muted)}.signin input[type=text],.signin input[type=password]{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:6px;margin-top:4px;font-size:14px}.signin label.inline{display:flex;gap:6px;align-items:center}.signin .tokenlink{margin:-4px 0 10px;color:var(--muted)}.signin .tokenlink a{font-weight:600}
 .warnline{background:var(--warn-bg);border:1px solid var(--warn-line);color:var(--warn-ink);border-radius:6px;padding:6px 10px;font-size:13px;margin:6px 0}.warnline:empty{display:none}
 /* verify */
 .vwrap{display:flex;flex-wrap:wrap;gap:16px;padding:16px 20px 40px;align-items:flex-start}.vside{flex:1 1 280px;max-width:340px;display:flex;flex-direction:column;gap:14px;min-width:0}.vmain{flex:999 1 600px;min-width:0}
@@ -102,3 +102,15 @@ mark.frag.ghost{background:none;border-bottom:1px dotted #a7afbc;cursor:default}
 .dtasks .tlist>h3{margin:12px 4px 4px}
 .act.judge.on{background:var(--j);color:#fff;border-color:transparent}.task.crit.judged{background:#fbfcfe}
 .blindnote{margin:8px 4px;padding:8px 12px;border-radius:8px;background:#eef3fb;border:1px solid #c9d6ea;font-size:13.5px;color:var(--ink2)}
+.fnote{display:flex;flex-direction:column;gap:2px;margin-top:6px}.fnote input{font:inherit;font-size:13px;padding:4px 6px;border:1px solid #cfd6df;border-radius:6px}.fnote.need input{border-color:#b3261e}.fnote.need span{color:#b3261e}.assigned{display:flex;flex-direction:column;gap:6px;margin:8px 0}
+.newp{background:color-mix(in srgb,#7a3fbf 16%,transparent);border-bottom:2px dashed #7a3fbf;color:inherit;border-radius:2px}.newp.sel{background:color-mix(in srgb,#7a3fbf 32%,transparent)}.nppanel{display:flex;flex-direction:column;gap:8px;margin:6px 0 10px}.npbox,.npi{border:1px solid #d9cdea;border-radius:8px;padding:8px 10px;background:#faf7fd}.npform{display:flex;flex-direction:column;gap:6px;margin-top:6px}.nplist{display:flex;flex-direction:column;gap:6px}
+.vmode.off{display:none}
+.taskline{background:#eef4ff;border:1px solid #c9d8f5;border-radius:8px;padding:10px 14px;margin:0 0 12px;font-size:14.5px}.taskline .link{margin-left:4px}
+.orient{font-size:15px;line-height:1.55}.orient h2{font-size:20px}.orient h3{font-size:17px;margin-top:22px}.md blockquote{border-left:3px solid var(--line);margin:8px 0;padding:4px 12px;background:#f7f8fb}.md hr{border:0;border-top:1px solid var(--line);margin:18px 0}
+.pdfov{position:fixed;inset:0;background:#e9ecf2;z-index:60;display:flex;flex-direction:column}
+.pdfbar{display:flex;gap:12px;align-items:center;padding:8px 14px;background:#fff;border-bottom:1px solid var(--line)}.pdfbar b{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pdfstatus{font-size:13px;color:#4a5160}
+.pdfnote{padding:6px 14px;background:#fff8e0;font-size:13px;border-bottom:1px solid var(--line)}
+.pdfwrap{position:relative;flex:1}.pdfbody{position:absolute;inset:0;overflow:auto}.pdfbody .pdfViewer{padding:12px 0}
+.pdfov .textLayer .highlight{background-color:rgba(255,213,0,.55)}.pdfov .textLayer .highlight.selected{background-color:rgba(255,170,0,.7)}
+/* PDF.js names its page boxes .page and expects content-box sizing; undo the app's rules inside the viewer */
+.pdfov .pdfViewer .page{padding:0;max-width:none;margin:1px auto -8px}.pdfov .pdfViewer,.pdfov .pdfViewer *{box-sizing:content-box}

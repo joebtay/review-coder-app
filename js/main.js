@@ -2,11 +2,13 @@ import { S, loadReview, refreshEvents } from './data.js';
 import { GitHubStore, StaticStore } from './store.js';
 import { h } from './ui.js';
 import { mountCodebook, toggleCodebook, render as renderCodebook } from './codebook.js';
-import { renderProject } from './project.js';
+import { renderProject, renderProtocol } from './project.js';
 import { renderDocuments, renderDocProfile } from './documents.js';
 import { renderVerify, V } from './verify.js';
 import { renderScreen, SC } from './screen.js';
 import { renderAgreement } from './agreement.js';
+import { feature } from './features.js';
+import { orientationPage, hasOrientation } from './orientation.js';
 
 const NAV = [['project', 'Project'], ['documents', 'Documents'], ['screen', 'Screen'], ['code', 'Code'], ['verify', 'Verify'], ['agreement', 'Agreement'], ['overview', 'Overview']];
 const CFG = 'rc:config';
@@ -15,6 +17,8 @@ let shell = null, main = null, pill = null, pendingRender = false;
 
 const cfg = () => { try { return JSON.parse(localStorage.getItem(CFG) || 'null'); } catch { return null; } };
 const saveCfg = (c) => { try { localStorage.setItem(CFG, JSON.stringify(c)); } catch {} };
+// A classic token with only the repo box ticked: GitHub opens its form with this scope selected.
+const TOKEN_URL = 'https://github.com/settings/tokens/new?scopes=repo&description=Review%20Coder';
 const apiOverride = () => { const q = new URLSearchParams(location.search).get('api'); return q && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(q) ? q : null; };
 
 function signIn(msg) {
@@ -22,7 +26,7 @@ function signIn(msg) {
   const qRepo = new URLSearchParams(location.search).get('repo');
   const linkRepo = qRepo && /^[\w.-]+\/[\w.-]+$/.test(qRepo) ? qRepo : null;
   const repo = h('input', { type: 'text', id: 'repo', placeholder: 'owner/repo', value: linkRepo || c.repo || '', autocomplete: 'off' });
-  const token = h('input', { type: 'password', id: 'token', placeholder: 'GitHub fine-grained token', value: c.token || '', autocomplete: 'off' });
+  const token = h('input', { type: 'password', id: 'token', placeholder: 'GitHub token', value: c.token || '', autocomplete: 'off' });
   const remember = h('input', { type: 'checkbox', id: 'remember', checked: true });
   const err = h('div', { class: 'warnline', id: 'err', text: msg || '' });
   const go = async () => {
@@ -34,11 +38,18 @@ function signIn(msg) {
   app.replaceChildren(h('div', { class: 'signin' },
     h('h1', { text: 'Review Coder' }), h('p', { class: 'muted', text: 'Code, verify and screen documents for an evidence review. Everything is saved to your review\'s private GitHub repo.' }),
     h('label', null, 'Review data repository', repo), h('label', null, 'Your GitHub token', token),
+    h('p', { class: 'small tokenlink' }, 'No token yet? ', h('a', { href: TOKEN_URL, target: '_blank', rel: 'noopener', id: 'make-token', text: 'Make one on GitHub' }),
+      ' (opens with the right box ticked: choose 90 days, click Generate token, copy it and paste it here).'),
     h('label', { class: 'inline' }, remember, ' Remember on this device'),
     err, h('div', { class: 'row' }, h('button', { type: 'button', class: 'btn primary', onclick: go, text: 'Open review' }), h('button', { type: 'button', class: 'btn', onclick: () => start(new StaticStore('./demo/'), null, false), text: 'Try the demo' })),
     h('details', null, h('summary', { text: 'How to make a token' }),
+      h('p', { class: 'small', text: 'If the review repo is yours, or belongs to an organisation you are in, make a fine-grained token:' }),
       h('ol', null, h('li', { text: 'GitHub, Settings, Developer settings, Fine-grained tokens, Generate new token.' }), h('li', { text: 'Repository access: only select repositories, then pick the review data repo.' }),
-        h('li', { text: 'Permissions: Contents, read and write. Nothing else.' }), h('li', { text: 'Set an expiry that covers the review. The token stays in this browser and goes only to api.github.com.' })))));
+        h('li', { text: 'Permissions: Contents, read and write. Nothing else.' }), h('li', { text: 'Set an expiry that covers the review. The token stays in this browser and goes only to api.github.com.' })),
+      h('p', { class: 'small', text: 'If you were invited to a repo on another person\'s account, GitHub does not offer it for a fine-grained token. Make a classic token instead:' }),
+      h('ol', null, h('li', null, 'Use the "Make one on GitHub" link above, or: GitHub, Settings, Developer settings, Personal access tokens, Tokens (classic), Generate new token (classic).'),
+        h('li', { text: 'Scopes: tick repo only.' }), h('li', { text: 'Expiration: 90 days, or the length of the review.' }),
+        h('li', { text: 'A classic token reaches every repo you can open, so use it only here, on your own computer.' })))));
 }
 
 async function start(store, conf, remember) {
@@ -52,7 +63,7 @@ async function start(store, conf, remember) {
     route();
   } catch (e) {
     if (conf && (e.status === 0 || e.status >= 500)) { offlineScreen(store, conf, remember, e); return; }
-    const m = e.status === 401 ? 'GitHub rejected the token.' : e.status === 404 ? 'Repository not found, or the token cannot see it.' : e.status === 0 ? 'Could not reach GitHub.' : e.message;
+    const m = e.status === 401 ? 'GitHub rejected the token.' : e.status === 404 ? 'Repository not found, or the token cannot see it. If you were invited, accept the invitation on GitHub first (check your email), then try again.' : e.status === 0 ? 'Could not reach GitHub.' : e.message;
     signIn(m);
   }
 }
@@ -68,13 +79,14 @@ function offlineScreen(store, conf, remember, e) {
 function buildShell(handle) {
   pill = h('div', { class: 'syncpill' });
   main = h('main', { id: 'main' });
-  const nav = h('nav', { 'aria-label': 'Workspace' }, NAV.map(([k, l]) => h('a', { href: `#/${k}`, 'data-k': k, text: l })));
+  const nav = h('nav', { 'aria-label': 'Workspace' }, NAV.filter(([k]) => feature(k)).map(([k, l]) => h('a', { href: `#/${k}`, 'data-k': k, text: l })));
   shell = h('div', { class: 'shell' },
     h('header', { class: 'top' },
       h('div', { class: 'brand' }, h('div', { class: 'logo' }, '≡'), h('div', null, h('b', { text: 'Review Coder' }), h('div', { class: 'muted small', text: S.review.title }))),
       nav,
       h('div', { class: 'right' }, pill,
-        h('button', { type: 'button', class: 'btn small', onclick: () => toggleCodebook(), title: 'Show definitions (?)' }, 'Codebook'),
+        hasOrientation() ? h('a', { href: '#/orientation', class: 'btn small', id: 'orient-header', title: 'The three questions, their definitions and worked examples' }, 'How the codes work') : null,
+        S.review.codebook || Object.keys(S.frames || {}).length ? h('button', { type: 'button', class: 'btn small', onclick: () => toggleCodebook(), title: 'Show definitions (?)' }, 'Codebook') : null,
         h('div', { class: 'who', title: handle }, h('span', { class: 'av', text: handle.slice(0, 2).toUpperCase() }), h('span', { class: 'muted small', text: handle })),
         h('button', { type: 'button', class: 'btn small', onclick: () => { if (S.sync && S.sync.pending() && !confirm(`${S.sync.pending()} changes have not reached GitHub yet. They stay saved on this device. Sign out anyway?`)) return; try { localStorage.removeItem(CFG); } catch {} location.hash = ''; location.reload(); } }, 'Sign out'))),
     main);
@@ -108,13 +120,18 @@ function route() {
   if (!main) return;
   const parts = location.hash.replace(/^#\/?/, '').split('/');
   const page = parts[0] || 'project';
-  shell.querySelectorAll('nav a').forEach((a) => a.classList.toggle('on', a.dataset.k === page || (page === 'doc' && a.dataset.k === 'documents')));
+  shell.querySelectorAll('nav a').forEach((a) => a.classList.toggle('on', a.dataset.k === page || (page === 'doc' && a.dataset.k === 'documents') || (page === 'protocol' && a.dataset.k === 'project')));
   const y = window.scrollY;
-  if (page === 'project') renderProject(main);
+  const off = { documents: 'documents', doc: 'documents', verify: 'verify', screen: 'screen', agreement: 'agreement', overview: 'overview', code: 'code' }[page];
+  if (off && !feature(off)) main.replaceChildren(h('div', { class: 'page narrow' }, h('h1', { text: NAV.find((n) => n[0] === page)?.[1] || 'Not available' }),
+    h('p', { class: 'muted', text: 'This part of the platform is not switched on for this review yet.' }), h('p', null, h('a', { href: '#/project', text: 'Back to the project' }))));
+  else if (page === 'project') renderProject(main);
+  else if (page === 'protocol') renderProtocol(main);
   else if (page === 'documents') renderDocuments(main);
   else if (page === 'doc') renderDocProfile(main, decodeURIComponent(parts[1] || ''));
   else if (page === 'verify') renderVerify(main);
   else if (page === 'screen') renderScreen(main);
+  else if (page === 'orientation' && hasOrientation()) main.replaceChildren(orientationPage(() => { location.hash = '#/verify'; }, 'Back to coding'));
   else if (page === 'agreement') renderAgreement(main);
   else main.replaceChildren(h('div', { class: 'page' }, h('h1', { text: NAV.find((n) => n[0] === page)?.[1] || 'Not found' }), h('p', { class: 'muted', text: page === 'overview' ? 'The matrix and audit trail arrive in stage 4.' : 'This module arrives in stage 5.' })));
   renderCodebook(true);

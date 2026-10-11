@@ -1,12 +1,14 @@
 // Verify by document: the whole text with every coded fragment marked, and the fragments' codes beside it.
 
-import { S, docEvents, addEvent, firstCodes, firstExtras, unitList, findUnit, notify } from './data.js';
+import { S, docEvents, allEvents, addEvent, firstCodes, firstExtras, unitList, findUnit, notify } from './data.js';
 import { memoFor, commentsFor } from './events.js';
 import { h, colourFor, bar, pct } from './ui.js';
-import { textPane, whereText, saveScroll, restoreScroll } from './fulltext.js';
+import { textPane, whereText, saveScroll, restoreScroll, pagesFor } from './fulltext.js';
+import { frameFor, submitted, unblinded, blindSamplesFor, SAMPLES_DOC } from './assign.js';
+import { passagesFor, passageSpans, rangeOffsets, isCode, passagesCSV, PASSAGE_FIELDS } from './passages.js';
 import { V, renderVerify, modeBar, verifiableFrames, indexMine, unresolved, badParent, fieldRows, docOrder, currentSample } from './verify.js';
 
-export const D = { doc: null, task: null, fidx: 0, tab: null, filter: 'todo', scroll: null, keep: null };
+export const D = { doc: null, task: null, fidx: 0, tab: null, filter: 'todo', scroll: null, keep: null, sel: null, np: null, msg: null };
 
 /** For each verifiable frame, its current sample: the same one the fragment view uses. */
 function activeSamples() {
@@ -19,7 +21,8 @@ function activeSamples() {
 function buildTasks(active) {
   const byDoc = new Map();
   const ord = docOrder();
-  for (const { frame, sample } of active) {
+  for (const { frame: base, sample } of active) {
+    const frame = frameFor(base, sample);
     const mine = indexMine(sample);
     for (const u of sample.units) {
       if (!byDoc.has(u.doc)) byDoc.set(u.doc, []);
@@ -92,10 +95,43 @@ export function renderDocView(root) {
       active.map(({ frame, sample }) => { const ss = S.samples.filter((x) => x.frame === frame.id && x.layer === S.review.first_layer);
         return ss.length > 1 ? h('label', { class: 'sel' }, frame.name, h('select', { onchange: (e) => { V.pick[frame.id] = e.target.value; D.task = null; rr(); } }, ss.map((x) => h('option', { value: x.id, selected: x.id === sample.id, text: `${x.id} \u00b7 ${x.units.length} units${x.mode === 'documents' ? ' (whole documents)' : ''}` }))))
           : h('div', { class: 'muted small', text: `${frame.name}: ${sample.id} \u00b7 ${sample.units.length} units` }); }),
-      h('button', { type: 'button', class: 'link', onclick: () => { V.sampleId = '__new'; V.draft = null; rr(); } }, 'Draw another sample')));
+      h('button', { type: 'button', class: 'link', onclick: () => { V.sampleId = '__new'; V.draft = null; rr(); } }, 'Draw another sample')),
+    h('section', { class: 'card' }, h('h2', { text: 'New codes and comments' }),
+      h('p', { class: 'muted small', text: 'Select text in the Text tab to add a code or a comment. The list for ruling holds every one you can see.' }),
+      h('button', { type: 'button', class: 'btn', onclick: () => exportPassages() }, 'Export for ruling (CSV)')));
+
+  // ----- new codes and comments on selected text
+  if (D.sel && D.sel.doc !== D.doc) { D.sel = null; D.np = null; }
+  // every blind sample still closed that holds this document, whatever sample is in view
+  const sev = docEvents(SAMPLES_DOC);
+  const blinds = blindSamplesFor(S.samples, D.doc, sev);
+  const blindSample = blinds[0] || (tasks.find((t) => t.sample.coders) || {}).sample || null;
+  const mySub = blinds.some((b) => submitted(sev, b.id).has(S.handle)) || (!!blindSample && submitted(sev, blindSample.id).has(S.handle));
+  const allOpen = !blinds.length;
+  const plist = passagesFor(docEvents(D.doc));
+  const pg = pagesFor(D.doc);
+  const extra = pg ? passageSpans(plist, pg) : new Map();
+  if (D.sel && pg) { const i = pg.findIndex((p) => String(p.label) === String(D.sel.page)); if (i >= 0) { if (!extra.has(i)) extra.set(i, []); extra.get(i).push({ start: D.sel.start, end: D.sel.end, key: 'np:sel' }); } }
+  const ptitle = (k) => { if (k === 'np:sel') return 'Your selection'; const p = plist.find((x) => 'np:' + x.id === k); return p ? `${p.coder}: ${isCode(p) ? 'new code ' + Object.values(p.codes).filter(Boolean).join(' / ') : 'comment'}${p.comment ? ' · ' + p.comment : ''}` : k; };
+  const onMouseUp = () => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount || !pg) return;
+    const r = sel.getRangeAt(0);
+    const host = (n) => (n.nodeType === 1 ? n : n.parentElement)?.closest('.pg');
+    const a = host(r.startContainer), b = host(r.endContainer);
+    if (!a || a !== b) { D.msg = 'Select text within one page.'; rr(); return; }
+    const i = Number(a.dataset.pg); const off = rangeOffsets(a.querySelector('.pgt'), r);
+    if (!off) return;
+    const text = pg[i].text; let { start, end } = off;
+    while (start < end && /\s/.test(text[start])) start++;
+    while (end > start && /\s/.test(text[end - 1])) end--;
+    if (end - start < 3) return;
+    D.sel = { doc: D.doc, page: pg[i].label, pdf_file: pg[i].file || (doc && doc.pdf) || `documents/${D.doc}.pdf`, pdf_page: pg[i].n, start, end, quote: text.slice(start, end) }; D.np = null; D.msg = null;
+    sel.removeAllRanges(); rr();
+  };
 
   // ----- full text
-  const pane = textPane({ doc, id: D.doc, title: doc ? doc.title : D.doc, sub: `${D.doc}${doc && doc.year ? ' \u00b7 ' + doc.year : ''}`,
+  const pane = textPane({ extra, extraTitle: ptitle, onMouseUp, doc, id: D.doc, title: doc ? doc.title : D.doc, sub: `${D.doc}${doc && doc.year ? ' \u00b7 ' + doc.year : ''}`,
     items: coded.filter((u) => taskUnits.has(u.id)).map(asItem), ghosts: coded.filter((u) => !taskUnits.has(u.id)).map(asItem),
     sel: cur.unit, onSelect: (k) => { const t = unitTask.get(k); if (t) select(t, false); }, tab: D.tab, setTab: (k) => { D.tab = k; D.scroll = cur.unit; rr(); }, scrollTo: D.scroll });
   const { pages, loc } = pane;
@@ -117,6 +153,8 @@ export function renderDocView(root) {
 
     const codes = firstCodes(t.doc, t.unit, t.frame.id) || {};
     const st = t.st;
+    const locked = !!t.sample.coders && submitted(docEvents(SAMPLES_DOC), t.sample.id).has(S.handle);
+    const note = (fd, text) => addEvent(t.doc, 'note', { sample: t.sample.id, unit: t.unit, frame: t.frame.id, field: fd.id, text });
     const act = (fd, action, value) => addEvent(t.doc, 'verify', { sample: t.sample.id, unit: t.unit, frame: t.frame.id, field: fd.id, action, value: value ?? null });
     const open = unresolved(t.frame, codes, st);
     const agreeRest = () => { for (const fd of open) if (!badParent(t.frame, fd, codes, st)) act(fd, 'agree'); };
@@ -128,7 +166,7 @@ export function renderDocView(root) {
     D.keyCtx = { t, codes, st, act, open, agreeRest, finish };
     return h('div', { class: 'task cur' + (st.done ? ' done' : '') }, head,
       h('div', { class: 'passage small' }, u ? (u.text || u.label) : '(unit not found)'),
-      h('div', { class: 'frows' }, fieldRows(t.frame, codes, st, { act, sel: D.fidx, setSel: (k) => { D.fidx = k; }, pk: t.key + '|', rerender: rr, root })),
+      h('div', { class: 'frows' }, fieldRows(t.frame, codes, st, { act, note, locked, sel: D.fidx, setSel: (k) => { D.fidx = k; }, pk: t.key + '|', rerender: rr, root })),
       h('div', { class: 'notes' },
         h('div', null, h('b', { text: "First coder's notes" }), !st.done ? h('div', { class: 'muted', text: 'Hidden until you finish this fragment.' }) :
           h('div', null, extras.note ? h('p', { text: extras.note }) : h('p', { class: 'muted', text: 'No notes.' }), claudeWhy.map((c) => h('p', { class: 'muted', text: `${c.k}: ${c.conf != null ? 'confidence ' + c.conf + '. ' : ''}${c.why || ''}` })))),
@@ -144,11 +182,68 @@ export function renderDocView(root) {
   };
   const tdone = tasks.filter(done).length;
   const nd = docDone(D.doc) ? nextDoc() : null;
-  const taskPanel = h('section', { class: 'card dtasks' },
+  const taskPanel = h('section', { class: 'card dtasks' }, passagePanel(),
     h('div', { class: 'dth' }, h('h2', { text: `Fragments ${tdone} / ${tasks.length}` }), h('span', { class: 'muted small', text: 'J K move · A D O U act · Enter done' })),
     bar(tasks.length ? tdone / tasks.length : 0),
     docDone(D.doc) ? h('div', { class: 'okline' }, h('span', { text: 'This document is finished.' }), nd ? h('button', { type: 'button', class: 'btn primary', onclick: () => gotoDoc(nd) }, `Next document: ${nd}`) : h('span', { class: 'muted', text: ' Every document in the sample is finished.' })) : null,
     h('div', { class: 'tlist' }, tasks.map(taskCard)));
+
+  function passagePanel() {
+    const kids = [];
+    const others = blindSample ? Object.keys(blindSample.coders).filter((c) => c !== S.handle) : [];
+    if (D.msg) kids.push(h('div', { class: 'warnline', text: D.msg }));
+    if (D.sel) {
+      const frame = frameFor(S.frames.taxonomy, blindSample);
+      const fields = frame.fields.filter((f) => PASSAGE_FIELDS.includes(f.id));
+      const np = D.np || (D.np = { mode: null, codes: {}, comment: '' });
+      const save = (codes) => {
+        const ev = { frame: 'taxonomy', page: String(D.sel.page), pdf_file: D.sel.pdf_file, pdf_page: D.sel.pdf_page, start: D.sel.start, end: D.sel.end, quote: D.sel.quote, codes, comment: np.comment.trim() || null };
+        if (blinds.length) { ev.sample = blinds[0].id; ev.samples = blinds.map((b) => b.id); } // blind: hidden from other coders until everyone submits each sample
+        const r = addEvent(D.doc, 'passage', ev);
+        if (!r) { D.msg = 'You have submitted this sample, so new codes on it are closed.'; rr(); return; }
+        D.sel = null; D.np = null; D.msg = null; rr();
+      };
+      const closed = mySub && !allOpen;
+      const codeClosed = mySub;
+      const fn = np.codes.function_primary || null;
+      kids.push(h('div', { class: 'npbox' },
+        h('div', { class: 'muted small', text: `Selected on p. ${D.sel.page}` }), h('div', { class: 'passage small', text: D.sel.quote }),
+        closed ? h('div', { class: 'muted', text: 'You have submitted this sample. New codes and comments open again when everyone has submitted.' })
+          : !np.mode ? h('div', { class: 'row' },
+            h('button', { type: 'button', class: 'btn primary', disabled: codeClosed, title: codeClosed ? 'The sample is submitted' : '', onclick: () => { np.mode = 'code'; rr(); } }, 'Add a new code'),
+            h('button', { type: 'button', class: 'btn', onclick: () => { np.mode = 'comment'; rr(); } }, 'Comment'),
+            h('button', { type: 'button', class: 'btn', onclick: () => { D.sel = null; D.np = null; rr(); } }, 'Clear'))
+          : h('div', { class: 'npform' },
+            np.mode === 'code' ? fields.map((f) => {
+              const opts = f.depends_on ? f.values.filter((v) => !v.parent || v.parent === fn) : f.values;
+              return h('label', { class: 'sel' }, f.label, h('select', { 'data-np': f.id, onchange: (e) => { np.codes[f.id] = e.target.value || null; if (f.id === 'function_primary') np.codes.subcategory = null; rr(); } },
+                h('option', { value: '', text: '(none)' }), opts.map((v) => h('option', { value: v.id, selected: np.codes[f.id] === v.id, text: v.label }))),
+                np.codes[f.id] && (f.values.find((v) => v.id === np.codes[f.id]) || {}).definition ? h('div', { class: 'fd', text: f.values.find((v) => v.id === np.codes[f.id]).definition }) : null);
+            }) : null,
+            h('label', null, np.mode === 'code' ? 'Comment (optional)' : 'Comment', h('textarea', { rows: 2, 'data-np': 'comment', oninput: (e) => { np.comment = e.target.value; } }, np.comment)),
+            h('div', { class: 'row' },
+              h('button', { type: 'button', class: 'btn primary', onclick: () => {
+                if (np.mode === 'code') { const codes = Object.fromEntries(PASSAGE_FIELDS.map((k) => [k, np.codes[k] || null])); if (!Object.values(codes).some(Boolean)) { D.msg = 'Choose at least one code.'; rr(); return; } save(codes); }
+                else { if (!np.comment.trim()) { D.msg = 'Write a comment first.'; rr(); return; } save(null); } } }, np.mode === 'code' ? 'Save new code' : 'Save comment'),
+              h('button', { type: 'button', class: 'btn', onclick: () => { D.sel = null; D.np = null; D.msg = null; rr(); } }, 'Cancel')),
+            blindSample && !allOpen ? h('div', { class: 'muted small', text: `Hidden from ${others.join(' and ')} until everyone submits.` }) : null)));
+    }
+    if (plist.length) kids.push(h('div', { class: 'nplist' }, h('b', { text: `New codes and comments on this document (${plist.length})` }),
+      plist.map((p) => h('div', { class: 'npi' },
+        h('div', { class: 'muted small', text: `${p.coder} · p. ${p.page} · ${isCode(p) ? 'new code' : 'comment'}` }),
+        h('div', { class: 'passage small', text: p.quote }),
+        isCode(p) ? h('div', null, PASSAGE_FIELDS.filter((k) => p.codes[k]).map((k) => h('span', { class: 'chip', text: p.codes[k] }))) : null,
+        p.comment ? h('div', { text: p.comment }) : null,
+        p.coder === S.handle && !(p.sample && mySub) ? h('button', { type: 'button', class: 'link', onclick: () => { if (confirm('Withdraw this? It stays in the record, marked withdrawn.')) addEvent(D.doc, 'passage-withdraw', { passage: p.id, sample: p.sample || undefined }); } }, 'Withdraw') : null))));
+    return kids.length ? h('div', { class: 'nppanel' }, kids) : null;
+  }
+
+  function exportPassages() {
+    const list = passagesFor(allEvents()).sort((a, b) => (a.doc + a.page + a.start < b.doc + b.page + b.start ? -1 : 1));
+    const csv = passagesCSV(list, (id) => (S.docById.get(id) || {}).title || '');
+    const a = h('a', { href: URL.createObjectURL(new Blob([csv], { type: 'text/csv' })), download: `new_codes_for_ruling_${new Date().toISOString().slice(0, 10)}.csv` });
+    document.body.append(a); a.click(); a.remove();
+  }
 
   // keep scroll positions across re-renders
   const saved = saveScroll(root, ['.dtb', '.tlist']);

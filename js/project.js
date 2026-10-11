@@ -1,13 +1,24 @@
 import { S, docEvents, allEvents, firstCodes, unitList } from './data.js';
-import { h, bar, pct, colourFor, chip } from './ui.js';
+import { h, bar, pct, colourFor, chip, mdToHtml } from './ui.js';
 import { openCodebook } from './codebook.js';
 import { queriesSection } from './queries.js';
 
 const num = (n) => (n === null || n === undefined ? h('span', { class: 'muted', text: 'not entered' }) : String(n));
 
+const PRISMA_LABELS = { identified: 'Records identified', screened: 'Records screened', sought: 'Reports sought for retrieval', assessed: 'Reports assessed for eligibility (full text)', included: 'Included' };
+
+/**
+ * The PRISMA 2020 flow from review.json `prisma`. With `prisma.show` (a list of boxes, for example
+ * ["screened", "assessed"]) only those boxes appear, with no exclusion box; `prisma.labels` renames boxes.
+ */
 export function prisma() {
   const p = S.review.prisma || {};
+  const label = (k) => (p.labels || {})[k] || PRISMA_LABELS[k];
   const box = (t, n, cls) => h('div', { class: 'pbox ' + (cls || '') }, h('div', { class: 'pt', text: t }), h('div', { class: 'pn' }, num(n)));
+  if (Array.isArray(p.show)) {
+    const ks = p.show.filter((k) => k in PRISMA_LABELS);
+    return h('div', { class: 'prisma' }, h('div', { class: 'pcol' }, ks.map((k, i) => [i ? h('div', { class: 'parrow', text: '↓' }) : null, box(label(k), p[k], k === 'included' ? 'inc' : '')])));
+  }
   const excl = p.excluded || [];
   const exTotal = excl.reduce((s, x) => s + (x.n || 0), 0);
   return h('div', { class: 'prisma' },
@@ -45,17 +56,36 @@ export function verifiedProgress(frame) {
   return { sampled: sampled.size, done: done.size, mine: mine.size };
 }
 
+const PROJECT_SECTIONS = ['protocol', 'questions', 'progress', 'team', 'links', 'queries', 'prisma', 'milestones', 'layers'];
+
+/** The protocol, from review.json `protocol.file` (markdown in the data repo), on its own page. */
+let protoCache = null;
+export function renderProtocol(root) {
+  const pr = S.review.protocol || {};
+  const body = h('div', { class: 'md orient', id: 'protocol-body' }, h('p', { class: 'muted', text: 'Loading the protocol' }));
+  root.replaceChildren(h('div', { class: 'page narrow' }, h('p', null, h('a', { href: '#/project', text: 'Back to the project' })), h('section', { class: 'card' }, body)));
+  if (!pr.file) { body.replaceChildren(h('p', { class: 'muted', text: 'No protocol file is set for this review.' })); return; }
+  if (protoCache && protoCache.file === pr.file) { body.innerHTML = protoCache.html; return; }
+  S.store.readText(pr.file).then((t) => { protoCache = { file: pr.file, html: mdToHtml(t) }; body.innerHTML = protoCache.html; })
+    .catch(() => body.replaceChildren(h('p', { class: 'muted', text: `Could not load ${pr.file}.` })));
+}
+
 export function renderProject(root) {
   const r = S.review;
   const prog = S.ready ? codedProgress() : null;
-  root.replaceChildren(
-    h('div', { class: 'page' },
-      h('div', { class: 'ph' }, h('h1', { text: r.title }), r.subtitle ? h('div', { class: 'muted', text: r.subtitle }) : null),
-      h('div', { class: 'grid2' },
-        h('section', { class: 'card' }, h('h2', { text: 'Research questions' }),
+  // review.json `project.sections` picks and orders the cards on this page. Left out, every card shows,
+  // with the protocol card only when `protocol` is set.
+  const want = (r.project && Array.isArray(r.project.sections)) ? r.project.sections : PROJECT_SECTIONS.filter((k) => k !== 'protocol' || r.protocol);
+  const pr = r.protocol || {};
+  const cards = {
+    protocol: () => h('section', { class: 'card' }, h('h2', { text: 'Protocol' }),
+      h('p', null, h('b', { text: pr.title || 'Protocol' })), pr.note ? h('p', { class: 'muted small', text: pr.note }) : null,
+      h('div', { class: 'row' }, pr.file ? h('a', { href: '#/protocol', class: 'btn primary', id: 'open-protocol', text: 'Read the protocol' }) : null,
+        pr.url ? h('a', { href: pr.url, target: '_blank', rel: 'noopener', class: 'btn', text: pr.url_label || 'Registration' }) : null)),
+    questions: () => h('section', { class: 'card' }, h('h2', { text: 'Research questions' }),
           (r.questions || []).length ? h('ol', { class: 'rq' }, r.questions.map((q) => h('li', null, h('b', { text: q.id + '  ' }), q.text,
             (q.frames || []).length ? h('div', { class: 'rqf' }, q.frames.map((f) => h('span', { class: 'pill', text: (S.frames[f] || {}).name || f }))) : null))) : h('p', { class: 'muted', text: 'None entered. Edit review.json in the data repo.' })),
-        h('section', { class: 'card' }, h('h2', { text: 'Progress' }),
+    progress: () => h('section', { class: 'card' }, h('h2', { text: 'Progress' }),
           !S.ready ? h('p', { class: 'muted', text: `Loading ${S.loading.done} of ${S.loading.total} files` }) : h('div', { class: 'prog' },
             h('div', { class: 'muted', text: `${S.docs.length} documents · ${prog.total.toLocaleString()} units of coding` }),
             Object.values(S.frames).map((fr) => {
@@ -64,19 +94,23 @@ export function renderProject(root) {
                 h('div', { class: 'prl' }, h('span', { text: 'Corpus coded' }), h('b', { text: `${pct(c.coded, c.total)}  (${c.coded.toLocaleString()} of ${c.total.toLocaleString()})` })), bar(c.total ? c.coded / c.total : 0, 'var(--blue)'),
                 h('div', { class: 'prl' }, h('span', { text: 'Sample verified' }), h('b', { text: v.sampled ? `${pct(v.done, v.sampled)}  (${v.done} of ${v.sampled}; you ${v.mine})` : 'no sample drawn' })), bar(v.sampled ? v.done / v.sampled : 0, 'var(--green)'));
             }))),
-        h('section', { class: 'card' }, h('h2', { text: 'Team' }),
+    team: () => h('section', { class: 'card' }, h('h2', { text: 'Team' }),
           h('ul', { class: 'plain' }, (r.team || []).map((t) => h('li', null, h('b', { text: t.name }), '  ', h('span', { class: 'muted', text: `${t.role}${t.handle ? ' · @' + t.handle : ''}` }))))),
-        h('section', { class: 'card' }, h('h2', { text: 'Key links' }),
+    links: () => h('section', { class: 'card' }, h('h2', { text: 'Key links' }),
           h('ul', { class: 'plain' },
             h('li', null, h('a', { href: '#/documents', text: 'Included documents' })),
             r.codebook ? h('li', null, h('a', { href: '#', onclick: (e) => { e.preventDefault(); openCodebook({ tab: 'full' }); }, text: `Codebook ${r.codebook_version || ''}` })) : null,
             (r.links || []).filter((l) => !/codebook/i.test(l.label)).map((l) => h('li', null, h('a', { href: l.url, target: '_blank', rel: 'noopener', text: l.label }))))),
-        queriesSection(),
-        h('section', { class: 'card wide' }, h('h2', { text: 'PRISMA 2020 flow' }), prisma()),
-        h('section', { class: 'card' }, h('h2', { text: 'Milestones' }),
+    queries: () => queriesSection(),
+    prisma: () => h('section', { class: 'card wide' }, h('h2', { text: 'PRISMA 2020 flow' }), prisma()),
+    milestones: () => h('section', { class: 'card' }, h('h2', { text: 'Milestones' }),
           h('ul', { class: 'plain' }, (r.milestones || []).map((m) => h('li', { class: m.done ? 'done' : '' }, h('span', { class: 'tick', text: m.done ? '✓' : '○' }), ' ', m.label, m.date ? h('span', { class: 'muted', text: '  ' + m.date }) : null)))),
-        h('section', { class: 'card' }, h('h2', { text: 'Layers' }),
+    layers: () => h('section', { class: 'card' }, h('h2', { text: 'Layers' }),
           (r.layers || []).length ? h('table', { class: 't' }, h('thead', null, h('tr', null, ['Layer', 'Kind', 'Frames'].map((x) => h('th', { text: x })))),
-            h('tbody', null, r.layers.map((l) => h('tr', null, h('td', { text: l.label || l.id }), h('td', { text: l.kind }), h('td', { text: (l.frames || []).join(', ') }))))) : h('p', { class: 'muted', text: 'No coded layers yet.' }))
-      )));
+            h('tbody', null, r.layers.map((l) => h('tr', null, h('td', { text: l.label || l.id }), h('td', { text: l.kind }), h('td', { text: (l.frames || []).join(', ') }))))) : h('p', { class: 'muted', text: 'No coded layers yet.' })),
+  };
+  root.replaceChildren(
+    h('div', { class: 'page' },
+      h('div', { class: 'ph' }, h('h1', { text: r.title }), r.subtitle ? h('div', { class: 'muted', text: r.subtitle }) : null),
+      h('div', { class: 'grid2' }, want.filter((k) => cards[k]).map((k) => cards[k]()))));
 }

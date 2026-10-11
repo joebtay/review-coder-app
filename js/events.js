@@ -11,8 +11,15 @@ export function mergeEvents(...lists) {
   return [...m.values()].sort(cmp);
 }
 
-export function makeEvent(coder, type, fields) {
-  return { id: uid(), t: new Date().toISOString(), coder, type, ...fields };
+/** Now, or 1 ms after `after` (the latest time already seen) if this clock is behind it.
+ *  Keeps a coder's later action after their earlier one when a clock is slow or steps back. */
+export function nextTime(after, now = Date.now()) {
+  const a = after ? Date.parse(after) : NaN;
+  return new Date(Number.isFinite(a) && now <= a ? a + 1 : now).toISOString();
+}
+
+export function makeEvent(coder, type, fields, after) {
+  return { id: uid(), t: nextTime(after), coder, type, ...fields };
 }
 
 const fkey = (e) => `${e.unit}|${e.frame}|${e.field}`;

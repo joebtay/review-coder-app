@@ -60,7 +60,8 @@ export function whereText(pages, loc, key) {
 }
 
 /**
- * The full-text card. o: {doc, id, title, sub, items, ghosts, sel, onSelect(key), tab, setTab(tab), scrollTo, colour(key)}
+ * The full-text card. o: {doc, id, title, sub, items, ghosts, sel, onSelect(key), tab, setTab(tab), scrollTo, colour(key),
+ *   extra: Map page index -> [{start, end, key}] for new passages (keys "np:..."), extraTitle(key), onMouseUp(ev)}
  * items are live (clickable); ghosts are shown faintly. Returns {el, loc, pages, after(root)}.
  */
 export function textPane(o) {
@@ -86,7 +87,8 @@ export function textPane(o) {
     body = h('p', { class: 'muted', text: FT.failed.has(o.id) ? 'Could not load the text.' : 'Loading the text' });
   } else {
     body = pages.map((p, i) => {
-      const sp = loc.spans.get(i) || [];
+      const xs = (o.extra && o.extra.get(i)) || [];
+      const sp = [...(loc.spans.get(i) || []), ...xs];
       const ci = [...(loc.cites.get(i) || [])].filter((k) => live.has(k));
       const hot = ci.includes(o.sel) || sp.some((s) => s.key === o.sel);
       return h('section', { class: 'pg' + (hot ? ' hot' : ''), 'data-pg': i },
@@ -95,6 +97,8 @@ export function textPane(o) {
         h('div', { class: 'pgt' }, segments(p.text.length, sp).map((g) => {
           const txt = p.text.slice(g.start, g.end);
           if (!g.keys.length) return txt;
+          const np = g.keys.filter((k) => k.startsWith('np:'));
+          if (np.length && np.length === g.keys.length) return h('mark', { class: 'newp' + (np.some((k) => k === 'np:sel') ? ' sel' : ''), title: np.map((k) => o.extraTitle ? o.extraTitle(k) : k).join('\n') }, txt);
           const ks = g.keys.filter((k) => live.has(k));
           if (!ks.length) return h('mark', { class: 'frag ghost', title: 'Coded, not in this sample: ' + g.keys.map((k) => label.get(k)).join(', ') }, txt);
           const on = ks.includes(o.sel);
@@ -105,7 +109,7 @@ export function textPane(o) {
   const el = h('section', { class: 'card dtext' },
     h('div', { class: 'dth' }, h('div', null, o.sub ? h('div', { class: 'mono muted', text: o.sub }) : null, h('div', { class: 'dt', text: o.title || o.id })),
       h('div', { class: 'seg' }, [['text', 'Text'], ['pdf', 'PDF']].map(([k, l]) => h('button', { type: 'button', class: tab === k ? 'on' : '', disabled: (k === 'pdf' && !hasPdf(o.doc)) || (k === 'text' && !hasText(o.id)), onclick: () => o.setTab(k) }, l)))),
-    h('div', { class: 'dtb' + (tab === 'pdf' ? ' pdf' : '') }, body));
+    h('div', { class: 'dtb' + (tab === 'pdf' ? ' pdf' : ''), onmouseup: o.onMouseUp || null }, body));
   const after = (root) => {
     const tb = root.querySelector('.dtb');
     if (!o.scrollTo || tab !== 'text' || !pages || !tb) return false;

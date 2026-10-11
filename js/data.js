@@ -2,6 +2,8 @@
 
 import { mergeEvents, makeEvent, cmp } from './events.js';
 import { Sync } from './sync.js';
+import { corpusUnits, corpusDocs } from './tier.js';
+import { viewFor, hiddenUnits, visible, submitted, SAMPLES_DOC, LOCKED_AFTER_SUBMIT } from './assign.js';
 
 export const S = {
   store: null, handle: null, review: null, frames: {}, docs: [], docById: new Map(),
@@ -25,7 +27,7 @@ export async function loadReview(store, handle) {
   S.review = await store.readJSON('review.json');
   S.frames = {};
   for (const f of S.review.frames || []) if (store.has(`frames/${f}.json`)) S.frames[f] = await store.readJSON(`frames/${f}.json`);
-  S.docs = store.has('documents/index.json') ? await store.readJSON('documents/index.json') : [];
+  S.docs = corpusDocs(store.has('documents/index.json') ? await store.readJSON('documents/index.json') : [], S.review);
   S.docById = new Map(S.docs.map((d) => [d.id, d]));
   S.queries = store.has('queries.json') ? await store.readJSON('queries.json') : [];
   const sc = S.review.screening;
@@ -66,13 +68,17 @@ export async function loadRest() {
   for (const [doc, evs] of Object.entries(S.sync.outbox)) S.events.set(doc, mergeEvents(S.events.get(doc), evs));
   notify();
   await pool(jobs, 8, async ([kind, id]) => {
-    if (kind === 'units') S.units.set(id, (await store.readJSON(`units/${id}.json`)).units);
+    if (kind === 'units') S.units.set(id, corpusUnits((await store.readJSON(`units/${id}.json`)).units, review));
     else {
       if (!S.layers.has(first)) S.layers.set(first, new Map());
       S.layers.get(first).set(id, await store.readJSON(`layers/${first}/${id}.json`));
     }
     tick();
   });
+  // samples name units by id: keep only units that loaded, so a sample can never show a unit outside the corpus
+  for (const sm of S.samples) sm.units = (sm.units || []).filter((u) => S.docById.has(u.doc) && S.units.get(u.doc)?.some((x) => x.id === u.unit));
+  // an assigned sample shows each coder only their own items, in their own order
+  S.samples = S.samples.map((sm) => viewFor(sm, S.handle));
   S.loading.done = S.loading.total;
   S.ready = true;
   notify();
@@ -89,7 +95,10 @@ export async function refreshEvents() {
 }
 
 export function addEvent(doc, type, fields) {
-  const e = makeEvent(S.handle, type, { doc, ...fields });
+  const sub = submitted.bind(null, rawEvents(SAMPLES_DOC));
+  if (LOCKED_AFTER_SUBMIT.has(type) && [fields.sample, ...(fields.samples || [])].some((x) => x && sub(x).has(S.handle))) return null; // submitted: answers are final
+  const prev = S.events.get(doc) || [];
+  const e = makeEvent(S.handle, type, { doc, ...fields }, prev.length ? prev[prev.length - 1].t : null);
   S.events.set(doc, mergeEvents(S.events.get(doc), [e]));
   S.sync.add(doc, e);
   notify();
@@ -100,8 +109,11 @@ export function addEvent(doc, type, fields) {
 export function latestDecision(qid) { const d = decisionsFor(qid); return d.length ? d[d.length - 1] : null; }
 export function decisionsFor(qid) { return docEvents('_queries').filter((e) => e.type === 'decision' && e.query === qid).sort(cmp); }
 
-export const allEvents = () => [].concat(...S.events.values());
-export const docEvents = (doc) => S.events.get(doc) || [];
+const rawEvents = (doc) => S.events.get(doc) || [];
+/** Units whose other coders' work stays hidden: units of a blind sample not yet submitted by every coder. */
+export const hidden = () => hiddenUnits(S.samples, rawEvents(SAMPLES_DOC));
+export const allEvents = () => { const hd = hidden(); return [].concat(...S.events.values()).filter((e) => visible(e, S.handle, hd)); };
+export const docEvents = (doc) => { const hd = hidden(); return rawEvents(doc).filter((e) => visible(e, S.handle, hd)); };
 
 const val = (x) => (x && typeof x === 'object' && !Array.isArray(x) ? x.v ?? null : x ?? null);
 export const codeValue = val;

@@ -1,3 +1,5 @@
+import { pdfTarget, searchWords, searchQueries } from './pdfloc.js';
+import { showPdf } from './pdfview.js';
 import { docQueryNotes } from './queries.js';
 import { S, unitList, firstCodes, allEvents } from './data.js';
 import { h, chip, colourFor, bar, pct } from './ui.js';
@@ -24,8 +26,8 @@ export function composition(docId) {
 
 function stacked(docId) {
   const { counts, total } = composition(docId);
-  return h('div', { class: 'stack', title: [...counts].map(([k, n]) => `${k}: ${n}`).join('\n') },
-    [...counts].map(([k, n]) => h('span', { style: { width: `${(100 * n) / (total || 1)}%`, background: colourFor(k) } })));
+  return h('div', { class: 'stack' }, // each colour names itself on hover (PI request R1, 11 October 2026)
+    [...counts].map(([k, n]) => h('span', { title: `${k}: ${n}`, style: { width: `${(100 * n) / (total || 1)}%`, background: colourFor(k) } })));
 }
 
 function verifiedByDoc() {
@@ -110,15 +112,21 @@ export function pdfParts(d) {
   return [{ file: d.pdf || `documents/${d.id}.pdf`, from: 1, to: null }];
 }
 
-export async function openPdf(d, page) {
-  const w = window.open('', '_blank');
+export async function openPdf(d, page, passage, printed) {
   try {
     const parts = pdfParts(d).filter((x) => S.store.has(x.file));
-    const n = parseInt(String(page ?? '').replace(/^(e|pp?\.\s*)/i, ''), 10); // e-pages (e23) count as 23
-    const part = (Number.isFinite(n) && parts.find((x) => n >= x.from && (x.to === null || n <= x.to))) || parts[0];
-    const local = Number.isFinite(n) ? n - part.from + 1 : null;
-    const blob = await S.store.readBlob(part.file);
-    const url = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
-    if (w) w.location = url + (local ? `#page=${local}` : '');
-  } catch (e) { if (w) w.close(); alert('Could not open the PDF: ' + e.message); }
+    let pages = null;
+    try { if (S.store.has(`documents/${d.id}.pages.json`)) pages = (await S.store.readJSON(`documents/${d.id}.pages.json`)).pages; } catch {}
+    const t = pdfTarget(pages, parts.length ? parts : pdfParts(d), page);
+    const blob = await S.store.readBlob(t.file);
+    const words = passage ? searchWords(passage) : '';
+    if (words) { try { await navigator.clipboard.writeText(words); } catch {} }
+    await showPdf({
+      blob: blob instanceof Blob ? blob : new Blob([blob], { type: 'application/pdf' }), page: t.page, title: d.title || d.id,
+      queries: passage ? searchQueries(passage) : [],
+      note: printed ? "This passage's page number is the document's printed page, which can differ from the PDF page. The highlight shows where the words are." : '',
+      fallback: words ? `Not found in the PDF text. The first words are copied: press Ctrl+F (Cmd+F on a Mac) and paste to search the page.` : '',
+    });
+  } catch (e) { alert('Could not open the PDF: ' + e.message); }
 }
+

@@ -7,10 +7,16 @@ import { h, chip, colourFor, bar, pct } from './ui.js';
 import { openCodebook, toggleCodebook } from './codebook.js';
 import { openPdf, pdfParts } from './documents.js';
 import { renderDocView } from './docview.js';
+import { frameFor, submitted, unblinded, SAMPLES_DOC, defaultSample } from './assign.js';
+import { feature } from './features.js';
+import { shouldOpen, markSeen, orientationPage, taskLine } from './orientation.js';
 
 export const V = { mode: 'fragment', pick: {}, frame: null, sampleId: null, filter: 'todo', unit: null, fieldIdx: 0, picker: null, pickQ: '', draft: null };
 
 export const ACTIONS = [['agree', 'Agree', 'A'], ['disagree', 'Disagree', 'D'], ['other', 'Other code', 'O'], ['unsure', 'Unsure', 'U']];
+// The Task 6A workbook set: Disagree means "this code is wrong" and needs a note; Other names the right code.
+export const ACTIONS_WB = [['agree', 'Agree', 'A'], ['disagree', 'Disagree', 'D'], ['other', 'Other', 'O']];
+const wb = (frame) => frame.answers === 'workbook';
 export const docOrder = () => new Map(S.docs.map((d, i) => [d.id, i]));
 
 export function verifiableFrames() {
@@ -19,6 +25,7 @@ export function verifiableFrames() {
 }
 
 export function sampleQueue(sample) {
+  if (sample.coders) return sample.units.slice(); // assigned: already in this coder's item order
   const ord = docOrder();
   const pos = new Map();
   for (const [doc] of ord) unitList(doc).forEach((u, i) => pos.set(doc + '|' + u.id, i));
@@ -28,36 +35,39 @@ export function sampleQueue(sample) {
 /** My verification state for every unit in a sample, built in one pass over the events. */
 export function indexMine(sample) {
   const idx = new Map();
-  const get = (u) => { if (!idx.has(u)) idx.set(u, { fields: {}, done: false }); return idx.get(u); };
+  const get = (u) => { if (!idx.has(u)) idx.set(u, { fields: {}, notes: {}, done: false }); return idx.get(u); };
   for (const e of allEvents().sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : a.id < b.id ? -1 : 1))) {
     if (e.coder !== S.handle || e.sample !== sample.id || e.frame !== sample.frame) continue;
     const s = get(e.unit);
     if (e.type === 'verify') { if (e.action === 'clear') delete s.fields[e.field]; else s.fields[e.field] = e; }
+    else if (e.type === 'note') s.notes[e.field] = e.text;
     else if (e.type === 'done') s.done = true;
     else if (e.type === 'reopen') s.done = false;
   }
   return idx;
 }
 
-export const effective = (codes, st, field) => {
+export const effective = (codes, st, field, frame) => {
   const e = st.fields[field];
   if (!e) return codes[field] ?? null;
   if (e.action === 'agree') return codes[field] ?? null;
-  if (e.action === 'disagree') return null;
+  if (e.action === 'disagree') return frame && wb(frame) ? codes[field] ?? null : null; // workbook: wrong, but no replacement named
   if (e.action === 'other') return e.value ?? null;
   return codes[field] ?? null;
 };
 
 export function unresolved(frame, codes, st) {
-  return frame.fields.filter((f) => !st.fields[f.id] && !(codes[f.id] == null && !f.required));
+  const notes = st.notes || {};
+  return frame.fields.filter((f) => (!st.fields[f.id] && !(codes[f.id] == null && !f.required))
+    || (wb(frame) && st.fields[f.id] && st.fields[f.id].action === 'disagree' && !(notes[f.id] || '').trim()));
 }
 
 export function badParent(frame, f, codes, st) {
   if (!f.depends_on) return null;
-  const v = effective(codes, st, f.id);
+  const v = effective(codes, st, f.id, frame);
   if (v == null) return null;
   const def = f.values.find((x) => x.id === v);
-  const parent = effective(codes, st, f.depends_on);
+  const parent = effective(codes, st, f.depends_on, frame);
   if (def && def.parent && def.parent !== parent) return `${v} belongs to ${def.parent}, not ${parent ?? '(blank)'}.`;
   return null;
 }
@@ -71,35 +81,40 @@ export function fieldRows(frame, codes, st, o) {
     const implicit = !e && orig == null && !f.required;
     const bp = badParent(frame, f, codes, st);
     const sel = i === o.sel;
-    const btns = ACTIONS.map(([a, label, k]) => h('button', { type: 'button', class: 'act ' + a + (e && e.action === a ? ' on' : ''), disabled: (a === 'agree' && !!bp) || (a === 'disagree' && orig == null), title: `${label} (${k})`,
+    const vdef = (v) => f.values.find((x) => x.id === v);
+    const btns = (wb(frame) ? ACTIONS_WB : ACTIONS).map(([a, label, k]) => h('button', { type: 'button', class: 'act ' + a + (e && e.action === a ? ' on' : ''), disabled: !!o.locked || (a === 'agree' && !!bp) || (a === 'disagree' && orig == null), title: `${label} (${k})`,
       onclick: (ev) => { ev.stopPropagation(); o.setSel(i); if (a === 'other') { V.picker = V.picker === key ? null : key; V.pickQ = ''; o.rerender(); } else { V.picker = null; o.act(f, a); } } }, label, h('kbd', { text: k })));
     let options = f.values;
-    if (f.depends_on) { const par = effective(codes, st, f.depends_on); options = f.values.filter((v) => !v.parent || v.parent === par); }
+    if (f.depends_on) { const par = effective(codes, st, f.depends_on, frame); options = f.values.filter((v) => !v.parent || v.parent === par); }
     const q = V.pickQ.toLowerCase();
     const pick = V.picker === key ? h('div', { class: 'picker' },
       options.length > 10 ? h('input', { type: 'text', placeholder: 'Filter', value: V.pickQ, oninput: (ev) => { V.pickQ = ev.target.value; o.rerender(); const el = o.root.querySelector('.picker input'); if (el) { el.focus(); el.setSelectionRange(V.pickQ.length, V.pickQ.length); } } }) : null,
       options.length ? options.filter((v) => !q || (v.label + v.definition).toLowerCase().includes(q)).map((v) => h('button', { type: 'button', class: 'po' + (e && e.value === v.id ? ' on' : ''), onclick: (ev) => { ev.stopPropagation(); V.picker = null; o.act(f, 'other', v.id); } },
         h('span', { class: 'dot', style: { background: colourFor(v.id) } }), h('b', { text: v.label }), h('span', { class: 'pd', text: v.definition || '' }))) : h('p', { class: 'muted', text: 'No values fit the chosen parent. Use Disagree.' }),
       f.required ? null : h('div', { class: 'muted', text: 'To make this field blank, use Disagree.' })) : null;
-    const status = !e ? (implicit ? 'Blank, nothing to check' : 'Not checked') : e.action === 'agree' ? 'Agreed' : e.action === 'disagree' ? 'Disagreed: should be blank' : e.action === 'other' ? `Changed to ${e.value}` : 'Marked unsure';
+    const status = !e ? (implicit ? 'Blank, nothing to check' : 'Not checked') : e.action === 'agree' ? 'Agreed' : e.action === 'disagree' ? (wb(frame) ? 'Disagreed: this code is wrong' : 'Disagreed: should be blank') : e.action === 'other' ? `Changed to ${e.value}` : 'Marked unsure';
     return h('div', { class: 'frow' + (sel ? ' sel' : '') + (e ? ' ' + e.action : ''), onclick: () => { if (o.sel !== i) { o.setSel(i); o.rerender(); } } },
       h('div', { class: 'fl' }, h('div', { class: 'fn' }, h('b', { text: f.label }), f.required ? null : h('span', { class: 'muted', text: ' optional' }),
         h('button', { type: 'button', class: 'link', onclick: (ev) => { ev.stopPropagation(); openCodebook({ frame: frame.id, field: f.id, value: orig, tab: 'field' }); } }, 'Definitions')),
         h('div', { class: 'fv' }, orig != null ? chip(orig, { onclick: (ev) => { ev.stopPropagation(); openCodebook({ frame: frame.id, field: f.id, value: orig, tab: 'field' }); } }) : h('span', { class: 'muted', text: '(blank)' }),
           e && e.action === 'other' ? h('span', { class: 'arrow' }, '→ ', chip(e.value, { onclick: (ev) => { ev.stopPropagation(); openCodebook({ frame: frame.id, field: f.id, value: e.value, tab: 'field' }); } })) : null,
           e && e.action === 'disagree' ? h('span', { class: 'arrow muted', text: '→ (blank)' }) : null),
-        orig != null && valueDef(frame.id, f.id, orig) && valueDef(frame.id, f.id, orig).definition ? h('div', { class: 'fd', text: valueDef(frame.id, f.id, orig).definition }) : null,
+        orig != null && vdef(orig) && vdef(orig).definition ? h('div', { class: 'fd', text: vdef(orig).definition }) : null,
+        orig != null && vdef(orig) && vdef(orig).source ? h('div', { class: 'muted small', text: 'Source: ' + vdef(orig).source }) : null,
         bp ? h('div', { class: 'warnline', text: bp + ' Choose Other or Disagree.' }) : null),
-      h('div', { class: 'fa' }, h('div', { class: 'acts' }, btns), h('div', { class: 'fs muted', text: status }), pick));
+      h('div', { class: 'fa' }, h('div', { class: 'acts' }, btns), h('div', { class: 'fs muted', text: status }), pick,
+        wb(frame) && o.note && !implicit ? (() => { const nv = (st.notes || {})[f.id] || ''; const need = e && e.action === 'disagree' && !nv.trim();
+          return h('label', { class: 'fnote' + (need ? ' need' : '') }, h('span', { class: 'muted small', text: need ? 'Note (needed for Disagree)' : 'Note' }),
+            h('input', { type: 'text', value: nv, disabled: !!o.locked, 'data-note': f.id, onclick: (ev) => ev.stopPropagation(), onblur: (ev) => { if (ev.target.value !== nv) o.note(f, ev.target.value); } })); })() : null));
   });
 }
 
 /** The sample a frame is being verified in. Both views use the same one, so a coder can switch views at any time. */
 export function currentSample(frame) {
   const ss = S.samples.filter((s) => s.frame === frame.id && s.layer === S.review.first_layer).sort((a, b) => (a.created < b.created ? -1 : 1));
-  const s = ss.find((x) => x.id === V.pick[frame.id]) || ss[ss.length - 1] || null;
-  if (s) V.pick[frame.id] = s.id;
-  return s;
+  // Only a coder's own pick is kept. The default is worked out afresh each time, so a render during
+  // loading, before each coder's view of the samples is set, cannot fix the wrong sample in place.
+  return defaultSample(ss, V.pick[frame.id]);
 }
 
 // ---------- sampler ----------
@@ -197,6 +212,7 @@ function renderSampler(root, frame) {
 
 /** The switch between the two Verify views. */
 export function modeBar(root) {
+  if (!feature('document_view')) return h('div', { class: 'vmode off' }); // one view only: nothing to switch
   return h('div', { class: 'vmode' }, h('div', { class: 'seg' },
     [['fragment', 'By fragment'], ['doc', 'By document']].map(([k, l]) => h('button', { type: 'button', class: V.mode === k ? 'on' : '', onclick: () => { V.mode = k; V.picker = null; if (V.sampleId === '__new') V.sampleId = null; renderVerify(root); window.scrollTo(0, 0); } }, l))),
     h('span', { class: 'muted', text: V.mode === 'doc' ? 'Whole document with every coded fragment marked. Work a document at a time.' : 'One fragment at a time, in sample order.' }));
@@ -207,18 +223,30 @@ export function renderVerify(root) {
   const frames = verifiableFrames();
   if (!S.review.first_layer || !frames.length) { root.replaceChildren(h('div', { class: 'page' }, h('h1', { text: 'Verify' }), h('p', { class: 'muted', text: 'This review has no coded layer to verify yet.' }))); return; }
   if (!V.frame || !frames.find((f) => f.id === V.frame)) V.frame = frames[0].id;
-  const frame = S.frames[V.frame];
-  if (V.sampleId === '__new') { renderSampler(root, frame); return; }
+  const baseFrame = S.frames[V.frame];
+  if (V.sampleId === '__new') { renderSampler(root, baseFrame); return; }
+  if (V.mode === 'doc' && !feature('document_view')) V.mode = 'fragment';
   if (V.mode === 'doc') { renderDocView(root); return; }
-  const samples = S.samples.filter((s) => s.frame === frame.id && s.layer === S.review.first_layer);
-  if (!samples.length || V.sampleId === '__new') { renderSampler(root, frame); return; }
-  const sample = currentSample(frame);
+  const samples = S.samples.filter((s) => s.frame === baseFrame.id && s.layer === S.review.first_layer);
+  if (!samples.length || V.sampleId === '__new') { renderSampler(root, baseFrame); return; }
+  const sample = currentSample(baseFrame);
+  const frame = frameFor(baseFrame, sample);
+  if (sample.coders && !sample.units.length) {
+    root.replaceChildren(modeBar(root), h('div', { class: 'page narrow' }, h('section', { class: 'card' }, h('h2', { text: sample.title || sample.id }),
+      h('p', { text: sample.assigned ? 'No items in this sample are assigned to you.' : `This sample is assigned to ${Object.keys(sample.coders).join(' and ')}. You have no items in it.` }),
+      samples.length > 1 ? h('label', { class: 'sel' }, 'Sample', h('select', { onchange: (e) => { V.pick[baseFrame.id] = e.target.value; V.unit = null; renderVerify(root); } }, samples.map((s) => h('option', { value: s.id, selected: s.id === sample.id, text: s.id })))) : null)));
+    return;
+  }
   if (!S.ready) { root.replaceChildren(h('div', { class: 'page' }, h('p', { class: 'muted', text: `Loading ${S.loading.done} of ${S.loading.total} files` }))); return; }
 
   const queue = sampleQueue(sample);
   const idx = indexMine(sample);
   const stOf = (u) => idx.get(u.unit) || { fields: {}, done: false };
   const doneN = queue.filter((u) => stOf(u).done).length;
+  if (V.orient || shouldOpen(sample, doneN)) {
+    root.replaceChildren(orientationPage(() => { markSeen(sample.id); V.orient = false; renderVerify(root); window.scrollTo(0, 0); }));
+    return;
+  }
   const unsureN = queue.filter((u) => Object.values(stOf(u).fields).some((e) => e.action === 'unsure')).length;
   const matches = (u) => V.filter === 'all' || (V.filter === 'todo' ? !stOf(u).done : V.filter === 'unsure' ? Object.values(stOf(u).fields).some((e) => e.action === 'unsure') : stOf(u).done);
   const shown = queue.filter(matches);
@@ -240,7 +268,9 @@ export function renderVerify(root) {
   const ui = list.findIndex((u) => u.id === cur.unit);
   const para = unit && unit.kind === 'paragraph';
 
+  const mySubmit = sample.coders && submitted(docEvents(SAMPLES_DOC), sample.id).has(S.handle);
   const act = (field, action, value) => { addEvent(cur.doc, 'verify', { sample: sample.id, unit: cur.unit, frame: frame.id, field: field.id, action, value: value ?? null }); };
+  const note = (field, text) => { addEvent(cur.doc, 'note', { sample: sample.id, unit: cur.unit, frame: frame.id, field: field.id, text }); };
   const open = unresolved(frame, codes, st);
   const agreeRest = () => { for (const f of open) if (!badParent(frame, f, codes, st)) act(f, 'agree'); };
   const finish = () => { addEvent(cur.doc, 'done', { sample: sample.id, unit: cur.unit, frame: frame.id }); };
@@ -257,20 +287,21 @@ export function renderVerify(root) {
       samples.length > 1 ? h('label', { class: 'sel' }, 'Sample', h('select', { onchange: (e) => { V.pick[frame.id] = e.target.value; V.unit = null; renderVerify(root); } }, samples.map((s) => h('option', { value: s.id, selected: s.id === sample.id, text: `${s.id}${s.mode === 'documents' ? ' (whole documents)' : ''}` })))) : null,
       h('div', { class: 'big' }, h('b', { text: `${doneN} / ${queue.length}` }), h('span', { class: 'muted', text: ` verified by you (${pct(doneN, queue.length)})` })),
       bar(queue.length ? doneN / queue.length : 0), unsureN ? h('div', { class: 'muted', text: `${unsureN} marked unsure` }) : null,
-      h('div', { class: 'lock muted', text: `Drawn ${sample.created.slice(0, 10)} by ${sample.created_by} · seed ${sample.seed} · ${Math.round(sample.fraction * 100)}% · locked` }),
-      h('button', { type: 'button', class: 'link', onclick: () => { V.sampleId = '__new'; V.draft = null; renderVerify(root); } }, 'Draw another sample')),
+      sample.coders ? assignedBox(sample, queue, doneN, mySubmit, () => renderVerify(root))
+        : h('div', { class: 'lock muted', text: `Drawn ${sample.created.slice(0, 10)} by ${sample.created_by} · seed ${sample.seed} · ${Math.round(sample.fraction * 100)}% · locked` }),
+      sample.coders ? null : h('button', { type: 'button', class: 'link', onclick: () => { V.sampleId = '__new'; V.draft = null; renderVerify(root); } }, 'Draw another sample')),
     h('section', { class: 'card' }, h('h2', { text: 'Queue' }),
       h('div', { class: 'pills' }, [['todo', 'To do'], ['unsure', 'Unsure'], ['done', 'Done'], ['all', 'All']].map(([k, l]) => h('button', { type: 'button', class: 'pill' + (V.filter === k ? ' on' : ''), onclick: () => { V.filter = k; V.unit = null; renderVerify(root); } }, l))),
       h('div', { class: 'qlist' }, (() => { const a = shown.findIndex((u) => u.unit === cur.unit); const b = a >= 0 ? Math.max(0, a - 3) : Math.max(0, shown.findIndex((u) => queue.indexOf(u) > qi)); return shown.slice(b, b + 12); })().map((u) => {
         const un = findUnit(u.doc, u.unit); const s = stOf(u);
         return h('button', { type: 'button', class: 'qi' + (u.unit === cur.unit ? ' cur' : ''), onclick: () => goto(u) },
-          h('span', { class: 'qs ' + (s.done ? 'd' : Object.keys(s.fields).length ? 'p' : '') }), h('span', { class: 'qt' }, h('b', { class: 'mono', text: u.unit }), h('span', { text: ' ' + ((un && (un.label || un.text)) || '').slice(0, 60) })));
+          h('span', { class: 'qs ' + (s.done ? 'd' : Object.keys(s.fields).length ? 'p' : '') }), h('span', { class: 'qt' }, sample.coders ? h('b', { class: 'mono', text: `${u.order[S.handle]}. ` }) : null, h('b', { class: 'mono', text: u.unit }), h('span', { text: ' ' + ((un && (un.label || un.text)) || '').slice(0, 60) })));
       })), h('div', { class: 'muted', text: `${shown.length} shown` })),
-    h('section', { class: 'card' }, h('h2', { text: 'Sample by group' }),
+    sample.coders ? null : h('section', { class: 'card' }, h('h2', { text: 'Sample by group' }),
       strata.map(([k, s]) => h('div', { class: 'sg' }, h('div', { class: 'sgl' }, h('span', null, h('span', { class: 'dot', style: { background: colourFor(k) } }), ' ' + k), h('span', { class: 'mono muted', text: `${sdone[k] || 0}/${stot[k] || 0}` })), bar((stot[k] ? (sdone[k] || 0) / stot[k] : 0), colourFor(k)))))
   );
 
-  const rows = fieldRows(frame, codes, st, { act, sel: V.fieldIdx, setSel: (i) => { V.fieldIdx = i; }, pk: '', rerender: () => renderVerify(root), root });
+  const rows = fieldRows(frame, codes, st, { act, note, locked: mySubmit, sel: V.fieldIdx, setSel: (i) => { V.fieldIdx = i; }, pk: '', rerender: () => renderVerify(root), root });
 
   // first coder's memo and rationale stay hidden until the unit is done
   const hidden = !st.done;
@@ -281,9 +312,9 @@ export function renderVerify(root) {
   const ctx = (u, label) => u ? h('div', { class: 'ctx' }, h('span', { class: 'ctxl', text: label }), (u.text || u.label || '').slice(0, 400)) : null;
   const card = h('section', { class: 'card ucard' },
     h('div', { class: 'uh' },
-      h('div', null, h('div', { class: 'muted', text: `Unit ${qi + 1} of ${queue.length}` }), h('div', { class: 'mono', text: `${cur.doc} · ${cur.unit}${unit && unit.page ? ' · p. ' + unit.page : ''}` })),
+      h('div', null, h('div', { class: 'muted', text: sample.coders ? `Item ${cur.order[S.handle]} of ${queue.length}` : `Unit ${qi + 1} of ${queue.length}` }), h('div', { class: 'mono', text: `${cur.doc} · ${cur.unit}${unit && unit.page ? ' · p. ' + unit.page : ''}` })),
       h('div', { class: 'row' }, h('a', { href: `#/doc/${encodeURIComponent(cur.doc)}`, class: 'btn', text: 'Document profile' }),
-        h('button', { type: 'button', class: 'btn', disabled: !(doc && pdfParts(doc).some((x) => S.store.has(x.file))), title: doc && pdfParts(doc).some((x) => S.store.has(x.file)) ? '' : 'The PDF is not in the data repo yet', onclick: () => openPdf(doc, unit && unit.page) }, 'Open PDF'),
+        !feature('pdf') ? null : h('button', { type: 'button', class: 'btn', disabled: !(doc && pdfParts(doc).some((x) => S.store.has(x.file))), title: doc && pdfParts(doc).some((x) => S.store.has(x.file)) ? 'Opens the PDF on this page and copies the first words of the passage, to search for' : 'The PDF is not in the data repo yet', onclick: () => openPdf(doc, unit && unit.page, unit && unit.text, unit && (unit.flags || []).includes('page-printed')) }, 'Open PDF'),
         h('button', { type: 'button', class: 'btn', onclick: prev, disabled: qi <= 0 }, 'Previous'), h('button', { type: 'button', class: 'btn', onclick: next }, 'Skip'))),
     h('div', { class: 'dt', text: doc ? doc.title : cur.doc }),
     para ? ctx(list[ui - 1], 'Before') : null,
@@ -300,25 +331,28 @@ export function renderVerify(root) {
       comments.map((c) => h('div', { class: 'cm' }, h('span', { class: 'cmw', text: c.coder }), h('span', { class: 'muted', text: ' ' + c.t.slice(0, 16).replace('T', ' ') }), h('div', { text: c.text }))),
       h('div', { class: 'row' }, h('textarea', { rows: 2, placeholder: 'Comment for the whole team', id: 'newcomment' }), h('button', { type: 'button', class: 'btn', onclick: () => { const t = document.getElementById('newcomment'); if (t.value.trim()) { addEvent(cur.doc, 'comment', { unit: cur.unit, text: t.value.trim() }); } } }, 'Post'))),
     h('div', { class: 'foot' },
-      st.done ? h('div', { class: 'row' }, h('span', { class: 'ok', text: 'Done' }), h('button', { type: 'button', class: 'btn', onclick: () => addEvent(cur.doc, 'reopen', { sample: sample.id, unit: cur.unit, frame: frame.id }) }, 'Reopen'), h('button', { type: 'button', class: 'btn primary', onclick: next }, 'Next unit'))
+      mySubmit ? h('div', { class: 'row' }, h('span', { class: 'ok', text: 'Submitted. Your answers are final.' }), h('button', { type: 'button', class: 'btn primary', onclick: next }, 'Next unit'))
+      : st.done ? h('div', { class: 'row' }, h('span', { class: 'ok', text: 'Done' }), h('button', { type: 'button', class: 'btn', onclick: () => addEvent(cur.doc, 'reopen', { sample: sample.id, unit: cur.unit, frame: frame.id }) }, 'Reopen'), h('button', { type: 'button', class: 'btn primary', onclick: next }, 'Next unit'))
         : h('div', { class: 'row' }, open.length > 1 ? h('button', { type: 'button', class: 'btn', title: 'Agree with every unchecked field (Shift+A)', onclick: () => agreeRest() }, 'Agree with all remaining') : null,
           h('button', { type: 'button', class: 'btn primary', disabled: open.length > 0, onclick: () => { finish(); setTimeout(next, 0); } }, 'Done, next unit'),
           open.length ? h('span', { class: 'muted', text: `${open.length} field${open.length > 1 ? 's' : ''} left: ${open.map((f) => f.label).join(', ')}` }) : null)));
 
-  root.replaceChildren(modeBar(root), h('div', { class: 'vwrap' }, aside, h('div', { class: 'vmain' }, card)));
+  const task = taskLine(() => { V.orient = true; renderVerify(root); window.scrollTo(0, 0); });
+  root.replaceChildren(modeBar(root), h('div', { class: 'vwrap' }, aside, h('div', { class: 'vmain' }, task, card)));
 
   // keyboard
   V.keys = (ev) => {
     if (/^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName) || ev.metaKey || ev.ctrlKey || ev.altKey) return false;
     const f = frame.fields[V.fieldIdx];
     const k = ev.key.toLowerCase();
+    if (mySubmit && !['j', 'k', 'arrowdown', 'arrowup', 'escape'].includes(k)) return false; // submitted: move, never answer
     if (k === 'arrowdown') { V.fieldIdx = Math.min(frame.fields.length - 1, V.fieldIdx + 1); V.picker = null; renderVerify(root); }
     else if (k === 'arrowup') { V.fieldIdx = Math.max(0, V.fieldIdx - 1); V.picker = null; renderVerify(root); }
     else if (k === 'j') next(); else if (k === 'k') prev();
     else if (k === 'a' && ev.shiftKey) agreeRest();
     else if (k === 'a') { const e2 = ACTIONS[0]; if (!badParent(frame, f, codes, st)) act(f, e2[0]); }
     else if (k === 'd') { if ((codes[f.id] ?? null) != null) act(f, 'disagree'); }
-    else if (k === 'u') act(f, 'unsure');
+    else if (k === 'u' && !wb(frame)) act(f, 'unsure');
     else if (k === 'o') { V.picker = V.picker === f.id ? null : f.id; V.pickQ = ''; renderVerify(root); }
     else if (k === 'enter' && !st.done && open.length === 0) { finish(); setTimeout(next, 0); }
     else if (k === 'escape') { if (V.picker) { V.picker = null; renderVerify(root); } else return false; }
@@ -326,4 +360,22 @@ export function renderVerify(root) {
     ev.preventDefault();
     return true;
   };
+}
+
+/** Sidebar box for an assigned sample: who it belongs to, blinding, and Submit. */
+export function assignedBox(sample, queue, doneN, mySubmit, rerender) {
+  const evs = docEvents(SAMPLES_DOC);
+  const subs = submitted(evs, sample.id);
+  const open = unblinded(sample, evs);
+  const others = Object.keys(sample.coders).filter((c) => c !== S.handle);
+  const submit = () => {
+    if (!confirm(`Submit all ${queue.length} items? Your answers become final and cannot be changed.`)) return;
+    addEvent(SAMPLES_DOC, 'submit', { sample: sample.id, items: queue.length });
+    rerender();
+  };
+  return h('div', { class: 'assigned' },
+    h('div', { class: 'muted', text: `Your ${queue.length} items, in your order.` }),
+    h('div', { class: 'muted', text: open ? 'Every coder has submitted. Answers are visible to all.' : `Blind: you cannot see ${others.join(' or ') || 'other coders'}'s answers, and they cannot see yours, until everyone submits. ${others.filter((c) => subs.has(c)).length ? others.filter((c) => subs.has(c)).join(', ') + ' has submitted.' : ''}` }),
+    mySubmit ? h('div', { class: 'ok', text: 'You have submitted this sample.' })
+      : h('button', { type: 'button', class: 'btn primary', disabled: doneN < queue.length, title: doneN < queue.length ? 'Finish every item first' : '', onclick: submit, text: doneN < queue.length ? `Submit sample (${queue.length - doneN} items left)` : 'Submit sample' }));
 }
