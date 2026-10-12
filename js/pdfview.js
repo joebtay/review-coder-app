@@ -16,7 +16,8 @@ async function load() {
  * Show a PDF over the app, on `page`, and highlight the first of `queries` that it finds.
  * `queries` go from the whole passage to its first words. `fallback` is shown when none is found.
  */
-export async function showPdf({ blob, page, queries = [], title = '', fallback = '', note = '' }) {
+export async function showPdf({ blob, page, queries = [], title = '', fallback = '', note = '', label = 'passage' }) {
+  const Label = label.charAt(0).toUpperCase() + label.slice(1);
   await load();
   const status = h('span', { class: 'pdfstatus', id: 'pdf-status', text: 'Loading the PDF' });
   const url = URL.createObjectURL(blob);
@@ -48,16 +49,16 @@ export async function showPdf({ blob, page, queries = [], title = '', fallback =
   let i = 0;
   const find = () => eventBus.dispatch('find', { source: null, type: '', query: tries[i], caseSensitive: false, entireWord: false, highlightAll: true, findPrevious: false, matchDiacritics: false });
   eventBus.on('updatefindcontrolstate', (e) => {
-    if (e.state === FindState.FOUND || e.state === FindState.WRAPPED) { status.textContent = i === 0 ? 'Passage highlighted' : 'Start of the passage highlighted'; ov.dataset.found = '1'; }
+    if (e.state === FindState.FOUND || e.state === FindState.WRAPPED) { status.textContent = i === 0 ? `${Label} highlighted` : `Start of the ${label} highlighted`; ov.dataset.found = '1'; }
     else if (e.state === FindState.NOT_FOUND) {
       if (++i < tries.length) find();
-      else { status.textContent = fallback || 'The passage was not found in the PDF text'; ov.dataset.found = '0'; }
+      else { status.textContent = fallback || `The ${label} was not found in the PDF text`; ov.dataset.found = '0'; }
     }
   });
   eventBus.on('pagesinit', () => {
     viewer.currentScale = Math.max(0.25, (container.clientWidth - 40) / (width * 96 / 72));
     viewer.currentPageNumber = target;
-    status.textContent = tries.length ? 'Finding the passage' : '';
+    status.textContent = tries.length ? `Finding the ${label}` : '';
     if (tries.length) find();
   });
   return ov;

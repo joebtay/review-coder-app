@@ -1,4 +1,5 @@
-import { S, docEvents, allEvents, firstCodes, unitList } from './data.js';
+import { S, docEvents, allEvents, firstCodes, unitList, notCoded, layerFlags } from './data.js';
+import { layerOf } from './settings.js';
 import { h, bar, pct, colourFor, chip, mdToHtml } from './ui.js';
 import { openCodebook } from './codebook.js';
 import { queriesSection } from './queries.js';
@@ -32,16 +33,22 @@ export function prisma() {
 
 /** units coded in the first layer / total units, per frame */
 export function codedProgress() {
-  const first = S.review.first_layer;
   const out = {};
   let total = 0;
-  for (const d of S.docs) total += unitList(d.id).filter((u) => !u.excluded).length;
+  for (const d of S.docs) total += unitList(d.id).filter((u) => !u.excluded && !u.layer).length;
   for (const fr of Object.values(S.frames)) {
-    const layerFrames = (S.review.layers.find((l) => l.id === first) || {}).frames || [];
+    const lid = layerOf(fr.id, S.review);
+    const layerFrames = (S.review.layers.find((l) => l.id === lid) || {}).frames || [];
     if (!layerFrames.includes(fr.id)) { out[fr.id] = { coded: 0, total }; continue; }
-    let coded = 0;
-    for (const d of S.docs) for (const u of unitList(d.id)) if (!u.excluded && firstCodes(d.id, u.id, fr.id)) coded++;
-    out[fr.id] = { coded, total };
+    // units the layer flags not-coded (headings) take no codes, and units it flags held are kept out until a ruling:
+    // both are left out of the frame's total, as are units another layer adds
+    let coded = 0, ftotal = 0;
+    for (const d of S.docs) for (const u of unitList(d.id)) {
+      if (u.excluded || (u.layer && u.layer !== lid) || notCoded(d.id, u.id, fr.id) || layerFlags(d.id, u.id, fr.id).includes('held')) continue;
+      ftotal++;
+      if (firstCodes(d.id, u.id, fr.id)) coded++;
+    }
+    out[fr.id] = { coded, total: ftotal };
   }
   return { out, total };
 }

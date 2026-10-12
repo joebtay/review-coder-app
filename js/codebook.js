@@ -2,10 +2,15 @@
 
 import { S } from './data.js';
 import { h, chip, colourFor, mdToHtml } from './ui.js';
+import { frameSetting } from './settings.js';
 
 const st = { open: false, frame: null, field: null, value: null, tab: 'field', q: '' };
 let el = null;
-let fullHtml = null;
+let full = { file: null, html: null };
+// the codebook file and version follow the frame shown (or in view), so an older and a newer frame each open their own
+const cbFrame = () => (st.frame && S.frames[st.frame] ? st.frame : S.frameInView);
+const cbFile = () => frameSetting(cbFrame(), 'codebook', S.review);
+const cbVersion = () => frameSetting(cbFrame(), 'codebook_version', S.review) || '';
 
 export function mountCodebook(root) {
   el = h('aside', { id: 'codebook', 'aria-label': 'Codebook', hidden: true });
@@ -24,7 +29,7 @@ export function openCodebook(opts = {}) {
   render();
 }
 
-function frameOrFirst() { return st.frame && S.frames[st.frame] ? S.frames[st.frame] : Object.values(S.frames)[0]; }
+function frameOrFirst() { return st.frame && S.frames[st.frame] ? S.frames[st.frame] : S.frames[S.frameInView] || Object.values(S.frames)[0]; }
 
 function valueBlock(v, hl) {
   return h('div', { class: 'cb-val' + (hl ? ' hl' : ''), id: hl ? 'cb-hl' : null },
@@ -65,10 +70,11 @@ function allTab() {
 
 function fullTab() {
   const wrap = h('div', { class: 'md' });
-  if (!S.review.codebook) return h('p', { class: 'muted', text: 'This review has no codebook file yet.' });
-  if (fullHtml) { wrap.innerHTML = fullHtml; queueMicrotask(jump); return wrap; }
+  const file = cbFile();
+  if (!file) return h('p', { class: 'muted', text: 'This review has no codebook file yet.' });
+  if (full.file === file && full.html) { wrap.innerHTML = full.html; queueMicrotask(jump); return wrap; }
   wrap.append(h('p', { class: 'muted', text: 'Loading the codebook' }));
-  S.store.readText(S.review.codebook).then((t) => { fullHtml = mdToHtml(t); if (st.open && st.tab === 'full') render(); }).catch((e) => { wrap.textContent = 'Could not load the codebook: ' + e.message; });
+  S.store.readText(file).then((t) => { full = { file, html: mdToHtml(t) }; if (st.open && st.tab === 'full') render(); }).catch((e) => { wrap.textContent = 'Could not load the codebook: ' + e.message; });
   return wrap;
 }
 
@@ -92,7 +98,7 @@ export function render(keepScroll) {
   const pos = focus ? document.activeElement.selectionStart : 0;
   el.replaceChildren(
     h('div', { class: 'cb-head' },
-      h('b', { text: 'Codebook' }), h('span', { class: 'muted', text: S.review.codebook_version || '' }),
+      h('b', { text: 'Codebook' }), h('span', { class: 'muted', text: cbVersion() }),
       h('button', { type: 'button', class: 'x', 'aria-label': 'Close codebook', onclick: closeCodebook }, '×')),
     h('div', { class: 'cb-tabs' }, [['field', 'This field'], ['all', 'All codes'], ['full', 'Full codebook']].map(([k, l]) =>
       h('button', { type: 'button', class: 'pill' + (st.tab === k ? ' on' : ''), onclick: () => { st.tab = k; st.q = ''; render(); } }, l))),

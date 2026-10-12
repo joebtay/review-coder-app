@@ -20,7 +20,7 @@ export function collectPairs(frame) {
   const pairs = [];
   for (const [k, e] of last) {
     if (!done.has(k.split('|').slice(0, 3).join('|'))) continue;
-    if (e.action === 'unsure') continue;
+    if (e.action === 'unsure' || e.action === 'answer') continue; // an answer to a question sample is not a code check
     const orig = (firstCodes(e.doc, e.unit, frame.id) || {})[e.field] ?? null;
     const fin = e.action === 'agree' ? orig : e.action === 'disagree' ? null : e.value ?? null;
     pairs.push({ field: e.field, doc: e.doc, unit: e.unit, coder: e.coder, a: orig, b: fin, action: e.action });

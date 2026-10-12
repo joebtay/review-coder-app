@@ -4,6 +4,7 @@ import { mergeEvents, makeEvent, cmp } from './events.js';
 import { Sync } from './sync.js';
 import { corpusUnits, corpusDocs } from './tier.js';
 import { viewFor, hiddenUnits, visible, submitted, SAMPLES_DOC, LOCKED_AFTER_SUBMIT } from './assign.js';
+import { layerOf, layerIds } from './settings.js';
 
 export const S = {
   store: null, handle: null, review: null, frames: {}, docs: [], docById: new Map(),
@@ -43,11 +44,12 @@ export async function loadReview(store, handle) {
 
 export async function loadRest() {
   const { store, review } = S;
-  const first = review.first_layer;
+  // every layer the review lists loads, so each frame is read from its own layer (settings.js layerOf)
+  const lids = layerIds(review);
   const jobs = [];
   for (const d of S.docs) {
     if (store.has(`units/${d.id}.json`)) jobs.push(['units', d.id]);
-    if (first && store.has(`layers/${first}/${d.id}.json`)) jobs.push(['layer', d.id]);
+    for (const lid of lids) if (store.has(`layers/${lid}/${d.id}.json`)) jobs.push(['layer', d.id, lid]);
   }
   const samplePaths = store.list('samples/').filter((p) => p.endsWith('.json'));
   const workPaths = store.list('work/').filter((p) => p.endsWith('.json'));
@@ -67,14 +69,21 @@ export async function loadRest() {
   // local outbox events that have not reached GitHub yet
   for (const [doc, evs] of Object.entries(S.sync.outbox)) S.events.set(doc, mergeEvents(S.events.get(doc), evs));
   notify();
-  await pool(jobs, 8, async ([kind, id]) => {
+  await pool(jobs, 8, async ([kind, id, lid]) => {
     if (kind === 'units') S.units.set(id, corpusUnits((await store.readJSON(`units/${id}.json`)).units, review));
     else {
-      if (!S.layers.has(first)) S.layers.set(first, new Map());
-      S.layers.get(first).set(id, await store.readJSON(`layers/${first}/${id}.json`));
+      if (!S.layers.has(lid)) S.layers.set(lid, new Map());
+      S.layers.get(lid).set(id, await store.readJSON(`layers/${lid}/${id}.json`));
     }
     tick();
   });
+  // a layer may add units of its own (its units block, "add": true), charted in that layer only; units/ is never altered
+  for (const [lid, docs] of S.layers) for (const [doc, d] of docs) for (const [id, v] of Object.entries(d?.units || {})) {
+    const list = S.units.get(doc) || [];
+    if (!v.add || list.some((x) => x.id === id)) continue;
+    const { add, change, was, ...u } = v;
+    S.units.set(doc, list.concat(corpusUnits([{ ...u, layer: lid }], review)));
+  }
   // samples name units by id: keep only units that loaded, so a sample can never show a unit outside the corpus
   for (const sm of S.samples) sm.units = (sm.units || []).filter((u) => S.docById.has(u.doc) && S.units.get(u.doc)?.some((x) => x.id === u.unit));
   // an assigned sample shows each coder only their own items, in their own order
@@ -118,21 +127,38 @@ export const docEvents = (doc) => { const hd = hidden(); return rawEvents(doc).f
 const val = (x) => (x && typeof x === 'object' && !Array.isArray(x) ? x.v ?? null : x ?? null);
 export const codeValue = val;
 
-/** The first layer's codes for a unit and frame: {field: value}. */
+/** The first coder's codes for a unit and frame, from the layer that holds the frame: {field: value}. */
 export function firstCodes(doc, unit, frame) {
-  const L = S.layers.get(S.review.first_layer)?.get(doc);
+  const L = S.layers.get(layerOf(frame, S.review))?.get(doc);
   const c = L?.codes?.[unit]?.[frame];
   if (!c) return null;
   return Object.fromEntries(Object.entries(c).map(([k, v]) => [k, val(v)]));
 }
-export function firstExtras(doc, unit) {
-  const L = S.layers.get(S.review.first_layer)?.get(doc);
+export function firstExtras(doc, unit, frame) {
+  const L = S.layers.get(frame ? layerOf(frame, S.review) : S.review.first_layer)?.get(doc);
   const raw = L?.codes?.[unit];
   return { note: L?.notes?.[unit] || '', raw };
 }
 
+/** The flags the frame's layer gives a unit. */
+export function layerFlags(doc, unit, frame) { return S.layers.get(layerOf(frame, S.review))?.get(doc)?.flags?.[unit] || []; }
+/** True when the frame's layer flags the unit not-coded (a heading, or a segment that takes no codes). */
+export function notCoded(doc, unit, frame) { return layerFlags(doc, unit, frame).includes('not-coded'); }
+
 export function unitList(doc) { return S.units.get(doc) || []; }
-export function findUnit(doc, id) { return unitList(doc).find((u) => u.id === id); }
+/** A unit as a frame's layer shows it. A layer may correct a unit's page, quote or label without touching units/
+ *  (which an earlier layer shares): `units: { "<unit>": { "page": "12", "text": "...", "label": "...", "flags": [...] } }`
+ *  in the layer's <doc>.json. With no frame, or no correction, the unit is as in units/. A layer's added units
+ *  ("add": true) load with the document's other units (loadRest). */
+export function findUnit(doc, id, frame) {
+  const u = unitList(doc).find((x) => x.id === id);
+  if (!u || !frame) return u;
+  const fix = S.layers.get(layerOf(frame, S.review))?.get(doc)?.units?.[id];
+  if (!fix) return u;
+  const out = { ...u };
+  for (const k of ['page', 'text', 'label', 'flags']) if (fix[k] !== undefined) out[k] = fix[k];
+  return out;
+}
 
 export function populationFor(frame) {
   const f = S.frames[frame];

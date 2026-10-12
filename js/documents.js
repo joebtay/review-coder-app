@@ -1,6 +1,6 @@
 import { pdfTarget, searchWords, searchQueries } from './pdfloc.js';
 import { showPdf } from './pdfview.js';
-import { docQueryNotes } from './queries.js';
+import { docQueryNotes, isPI, piOnlyFlag } from './queries.js';
 import { S, unitList, firstCodes, allEvents } from './data.js';
 import { h, chip, colourFor, bar, pct } from './ui.js';
 import { openCodebook } from './codebook.js';
@@ -51,7 +51,7 @@ export function renderDocuments(root) {
       h('input', { type: 'text', placeholder: 'Search title, author, organisation, country, ID', value: ui.q, oninput: (e) => { ui.q = e.target.value; renderDocuments(root); const i = root.querySelector('.filters input'); i.focus(); i.setSelectionRange(ui.q.length, ui.q.length); } }),
       h('select', { onchange: (e) => { ui.family = e.target.value; renderDocuments(root); } }, h('option', { value: '', text: 'All document types' }), fams.map((f) => h('option', { value: f, text: f, selected: f === ui.family }))),
       h('select', { onchange: (e) => { ui.flag = e.target.value; renderDocuments(root); } }, h('option', { value: '', text: 'All flags' }),
-        [...new Set(S.docs.flatMap((d) => d.flags || []))].map((f) => h('option', { value: f, text: f, selected: f === ui.flag })))),
+        [...new Set(S.docs.flatMap((d) => d.flags || []))].filter((f) => isPI() || !piOnlyFlag(f)).map((f) => h('option', { value: f, text: f, selected: f === ui.flag })))),
     h('div', { class: 'tw' }, h('table', { class: 't docs' },
       h('thead', null, h('tr', null, ['ID', 'Title', 'Year', 'Type', 'Country', 'Units', 'Composition', 'Verified'].map((x) => h('th', { text: x })))),
       h('tbody', null, rows.map((d) => {
@@ -83,7 +83,7 @@ export function renderDocProfile(root, id) {
       h('section', { class: 'card' }, h('h2', { text: 'Citation and source' }),
         meta('Authors', d.authors), meta('Organisation', d.org), meta('Year', d.year), meta('Type', d.type), meta('Family', d.family), meta('Country', d.country),
         d.url ? h('div', { class: 'kv' }, h('span', { class: 'k', text: 'Source' }), h('a', { href: d.url, target: '_blank', rel: 'noopener', text: d.url })) : null,
-        meta('Internal ID', d.id), (d.flags || []).length ? h('div', { class: 'kv' }, h('span', { class: 'k', text: 'Flags' }), d.flags.map((f) => h('span', { class: 'pill warn', text: f }))) : null,
+        meta('Internal ID', d.id), (d.flags || []).filter((f) => isPI() || !piOnlyFlag(f)).length ? h('div', { class: 'kv' }, h('span', { class: 'k', text: 'Flags' }), d.flags.filter((f) => isPI() || !piOnlyFlag(f)).map((f) => h('span', { class: 'pill warn', text: f }))) : null,
         h('div', { class: 'row' }, h('button', { type: 'button', class: 'btn', disabled: !pdfOk, title: pdfOk ? '' : 'The PDF is not in the data repo yet', onclick: () => openPdf(d, d.summary_page) }, 'Open full text'))),
       h('section', { class: 'card' }, h('h2', { text: 'Summary' }),
         d.summary ? h('p', { text: d.summary }) : h('p', { class: 'muted', text: 'No stated purpose in the source.' }),
@@ -112,7 +112,7 @@ export function pdfParts(d) {
   return [{ file: d.pdf || `documents/${d.id}.pdf`, from: 1, to: null }];
 }
 
-export async function openPdf(d, page, passage, printed) {
+export async function openPdf(d, page, passage, printed, label = 'passage') {
   try {
     const parts = pdfParts(d).filter((x) => S.store.has(x.file));
     let pages = null;
@@ -124,7 +124,7 @@ export async function openPdf(d, page, passage, printed) {
     await showPdf({
       blob: blob instanceof Blob ? blob : new Blob([blob], { type: 'application/pdf' }), page: t.page, title: d.title || d.id,
       queries: passage ? searchQueries(passage) : [],
-      note: printed ? "This passage's page number is the document's printed page, which can differ from the PDF page. The highlight shows where the words are." : '',
+      note: printed ? `This ${label}'s page number is the document's printed page, which can differ from the PDF page. The highlight shows where the words are.` : '', label,
       fallback: words ? `Not found in the PDF text. The first words are copied: press Ctrl+F (Cmd+F on a Mac) and paste to search the page.` : '',
     });
   } catch (e) { alert('Could not open the PDF: ' + e.message); }

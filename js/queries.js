@@ -5,6 +5,11 @@ import { h } from './ui.js';
 
 const draft = new Map(); // qid -> { choice, text }, kept across re-renders
 
+/** Queries are for the PI only (PI ruling, 11 October 2026): coders never see them, their flags or their answers. */
+export const isPI = () => (S.review.team || []).some((m) => m.handle === S.handle && m.role === 'PI');
+/** Flags that only the PI sees. */
+export const piOnlyFlag = (f) => /^query:/.test(f);
+
 const when = (t) => (t || '').slice(0, 10);
 const who = (e) => (S.review.team || []).find((m) => m.handle === e.coder)?.name || e.coder;
 const optLabel = (q, id) => (q.options || []).find((o) => o.id === id)?.label || id;
@@ -14,7 +19,19 @@ function decisionLine(q, e) {
     h('span', { class: 'muted', text: `  ${who(e)}, ${when(e.t)}` }));
 }
 
+function answeredCard(q, last) {
+  return h('div', { class: 'query decided answered', 'data-query': q.id },
+    h('div', { class: 'qh' }, h('b', { text: `${q.id}  ${q.title}` }), h('span', { class: 'pill on', text: 'answered' })),
+    h('div', { class: 'qstatus', text: q.status_note || 'Answered by the PI.' }),
+    h('p', { text: q.question }),
+    last ? h('div', { class: 'qanswer' }, h('div', null, h('span', { class: 'muted', text: 'Your answer: ' }), h('b', { text: optLabel(q, last.choice) })),
+      last.text ? h('div', null, h('span', { class: 'muted', text: 'Your note: ' }), h('span', { text: last.text })) : null,
+      h('div', { class: 'muted', text: `${who(last)}, ${when(last.t)}` }))
+      : h('div', { class: 'muted', text: 'No answer is recorded in the work files.' }));
+}
+
 export function queryCard(q) {
+  if (q.status === 'answered') return answeredCard(q, latestDecision(q.id)); // read only until the parked task reopens it
   const last = latestDecision(q.id);
   const dr = draft.get(q.id) || { choice: last ? last.choice : null, text: '' };
   const hist = decisionsFor(q.id);
@@ -40,17 +57,18 @@ export function queryCard(q) {
 
 export function queriesSection() {
   const qs = S.queries || [];
-  if (!qs.length) return null;
-  const open = qs.filter((q) => !latestDecision(q.id)).length;
+  if (!qs.length || !isPI()) return null;
+  const open = qs.filter((q) => q.status !== 'answered' && !latestDecision(q.id)).length;
   return h('section', { class: 'card wide', id: 'queries' }, h('h2', { text: `Queries for the PI (${open} open of ${qs.length})` }),
-    h('p', { class: 'muted', text: 'Decisions about which documents belong in the publication-level review. Every decision is saved with who made it and when, and can be revised.' }),
+    h('p', { class: 'muted', text: 'Decisions about which documents belong in the publication-level review. Every decision is saved with who made it and when. Answered queries are read only here. Only you see this section.' }),
     qs.map(queryCard));
 }
 
 /** Short notices for a document profile. */
 export function docQueryNotes(docId) {
+  if (!isPI()) return null;
   const qs = (S.queries || []).filter((q) => (q.docs || []).includes(docId));
   if (!qs.length) return null;
-  return h('section', { class: 'card wide' }, h('h2', { text: 'Open queries about this document' }),
-    qs.map((q) => { const l = latestDecision(q.id); return h('div', { class: 'qnote-doc' }, h('b', { text: `${q.id}  ${q.title}` }), l ? [' ', decisionLine(q, l)] : h('span', { class: 'muted', text: '  open' }), ' ', h('a', { href: '#/project', text: 'Go to query' })); }));
+  return h('section', { class: 'card wide' }, h('h2', { text: 'Queries about this document' }),
+    qs.map((q) => { const l = latestDecision(q.id); return h('div', { class: 'qnote-doc' }, h('b', { text: `${q.id}  ${q.title}` }), q.status === 'answered' ? h('div', { class: 'muted', text: q.status_note || 'Answered' }) : null, l ? [' ', decisionLine(q, l)] : h('span', { class: 'muted', text: '  open' }), ' ', h('a', { href: '#/project', text: 'Go to query' })); }));
 }

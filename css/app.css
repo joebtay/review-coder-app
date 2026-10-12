@@ -114,3 +114,4 @@ mark.frag.ghost{background:none;border-bottom:1px dotted #a7afbc;cursor:default}
 .pdfov .textLayer .highlight{background-color:rgba(255,213,0,.55)}.pdfov .textLayer .highlight.selected{background-color:rgba(255,170,0,.7)}
 /* PDF.js names its page boxes .page and expects content-box sizing; undo the app's rules inside the viewer */
 .pdfov .pdfViewer .page{padding:0;max-width:none;margin:1px auto -8px}.pdfov .pdfViewer,.pdfov .pdfViewer *{box-sizing:content-box}
+.qstatus{background:#eef6ee;border:1px solid #cfe3cf;border-radius:6px;padding:6px 10px;margin:6px 0;font-size:13.5px}.qanswer{background:#f7f8fb;border-radius:6px;padding:8px 10px;margin-top:6px;display:grid;gap:4px}

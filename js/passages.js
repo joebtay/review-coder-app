@@ -3,7 +3,12 @@
 // character offsets in that page's text, codes from the frame (none for a comment) and an optional comment.
 // Nothing here changes the master. The PI rules on each new code before master v1.5.
 
-export const PASSAGE_FIELDS = ['level', 'function_primary', 'subcategory'];
+/** The code fields used across a list of new codes, in the order they first appear. Each review sets its own (settings.js newCodeFields). */
+export function codeFields(list) {
+  const out = [];
+  for (const p of list) for (const k of Object.keys(p.codes || {})) if (!out.includes(k)) out.push(k);
+  return out;
+}
 
 /** Live passages on a document, oldest first: withdrawn ones drop out. */
 export function passagesFor(events) {
@@ -42,9 +47,9 @@ export function passageSpans(list, pages) {
 const csvCell = (v) => { let s = v == null ? '' : String(v); if (/^[=+\-@]/.test(s)) s = "'" + s; return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
 
 /** CSV of passages for the PI's ruling: one row per passage. */
-export function passagesCSV(list, titleOf = () => '') {
-  const head = ['id', 'kind', 'doc', 'title', 'page', 'pdf_file', 'pdf_page', 'words', 'level', 'function_primary', 'subcategory', 'comment', 'coder', 'time', 'sample'];
+export function passagesCSV(list, titleOf = () => '', fields = codeFields(list)) {
+  const head = ['id', 'kind', 'doc', 'title', 'page', 'pdf_file', 'pdf_page', 'words', ...fields, 'comment', 'coder', 'time', 'sample'];
   const rows = list.map((p) => [p.id, isCode(p) ? 'new code' : 'comment', p.doc, titleOf(p.doc), p.page, p.pdf_file, p.pdf_page, p.quote,
-    p.codes?.level, p.codes?.function_primary, p.codes?.subcategory, p.comment, p.coder, p.t, p.sample]);
+    ...fields.map((f) => p.codes?.[f]), p.comment, p.coder, p.t, p.sample]);
   return [head, ...rows].map((r) => r.map(csvCell).join(',')).join('\n') + '\n';
 }

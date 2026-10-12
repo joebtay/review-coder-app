@@ -10,6 +10,7 @@ import { renderDocView } from './docview.js';
 import { frameFor, submitted, unblinded, SAMPLES_DOC, defaultSample } from './assign.js';
 import { feature } from './features.js';
 import { shouldOpen, markSeen, orientationPage, taskLine } from './orientation.js';
+import { layerOf, unitLabel } from './settings.js';
 
 export const V = { mode: 'fragment', pick: {}, frame: null, sampleId: null, filter: 'todo', unit: null, fieldIdx: 0, picker: null, pickQ: '', draft: null };
 
@@ -19,9 +20,12 @@ export const ACTIONS_WB = [['agree', 'Agree', 'A'], ['disagree', 'Disagree', 'D'
 const wb = (frame) => frame.answers === 'workbook';
 export const docOrder = () => new Map(S.docs.map((d, i) => [d.id, i]));
 
+/** Frames a coder can verify: those of the first layer, then those of any other layer a sample is drawn on. */
 export function verifiableFrames() {
   const first = S.review.layers.find((l) => l.id === S.review.first_layer);
-  return Object.values(S.frames).filter((f) => first && (first.frames || []).includes(f.id));
+  const sampled = new Set(S.samples.map((x) => x.frame));
+  return Object.values(S.frames).filter((f) => (first && (first.frames || []).includes(f.id))
+    || (sampled.has(f.id) && S.samples.some((x) => x.frame === f.id && x.layer === layerOf(f.id, S.review))));
 }
 
 export function sampleQueue(sample) {
@@ -109,9 +113,24 @@ export function fieldRows(frame, codes, st, o) {
   });
 }
 
+const QFIELD = { id: '_question' };
+/** One question per item, with its options and a note (a sample with answers "question", such as the heading sample). */
+export function questionRows(q, st, o) {
+  const e = st.fields[QFIELD.id];
+  const nv = (st.notes || {})[QFIELD.id] || '';
+  return [h('div', { class: 'frow sel' + (e ? ' answered' : '') },
+    h('div', { class: 'fl' }, h('div', { class: 'fn' }, h('b', { text: q.text }))),
+    h('div', { class: 'fa' },
+      h('div', { class: 'acts' }, q.options.map((opt, i) => h('button', { type: 'button', class: 'act answer' + (e && e.value === opt ? ' on' : ''), 'data-option': opt, disabled: !!o.locked, title: `${opt} (${i + 1})`,
+        onclick: (ev) => { ev.stopPropagation(); o.act(QFIELD, 'answer', opt); } }, opt, h('kbd', { text: String(i + 1) })))),
+      h('div', { class: 'fs muted', text: e ? `Answered: ${e.value}` : 'Not answered' }),
+      h('label', { class: 'fnote' }, h('span', { class: 'muted small', text: 'Note (optional)' }),
+        h('input', { type: 'text', value: nv, disabled: !!o.locked, 'data-note': QFIELD.id, onclick: (ev) => ev.stopPropagation(), onblur: (ev) => { if (ev.target.value !== nv) o.note(QFIELD, ev.target.value); } }))))];
+}
+
 /** The sample a frame is being verified in. Both views use the same one, so a coder can switch views at any time. */
 export function currentSample(frame) {
-  const ss = S.samples.filter((s) => s.frame === frame.id && s.layer === S.review.first_layer).sort((a, b) => (a.created < b.created ? -1 : 1));
+  const ss = S.samples.filter((s) => s.frame === frame.id && s.layer === layerOf(frame.id, S.review)).sort((a, b) => (a.created < b.created ? -1 : 1));
   // Only a coder's own pick is kept. The default is worked out afresh each time, so a render during
   // loading, before each coder's view of the samples is set, cannot fix the wrong sample in place.
   return defaultSample(ss, V.pick[frame.id]);
@@ -157,7 +176,7 @@ function renderSampler(root, frame) {
   };
   const lock = async () => {
     const r = dr.result;
-    const base = { layer: S.review.first_layer, created: new Date().toISOString(), created_by: S.handle, locked: true, reason: dr.reason };
+    const base = { layer: layerOf(frame.id, S.review), created: new Date().toISOString(), created_by: S.handle, locked: true, reason: dr.reason };
     if (dr.mode === 'percent') {
       const n = S.samples.filter((x) => x.frame === frame.id).length + 1;
       const o = await saveSample({ ...base, frame: frame.id, mode: 'percent', seed: dr.seed, fraction: dr.fraction, min_per_stratum: dr.min, stratify_by: frame.stratify_by, population: r.population, strata: r.strata, topped_up: r.toppedUp, units: r.units }, `${frame.id}-s`, n);
@@ -196,7 +215,7 @@ function renderSampler(root, frame) {
   }
   const count = r ? (dr.mode === 'percent' ? r.units.length : r.byFrame.reduce((n, x) => n + x.units.length, 0)) : 0;
   root.replaceChildren(modeBar(root), h('div', { class: 'page narrow' },
-    h('div', { class: 'ph' }, h('h1', { text: 'Draw a verification sample' }), h('div', { class: 'muted', text: `Checks the ${S.review.layers.find((l) => l.id === S.review.first_layer).label} layer` })),
+    h('div', { class: 'ph' }, h('h1', { text: 'Draw a verification sample' }), h('div', { class: 'muted', text: `Checks the ${S.review.layers.find((l) => l.id === layerOf(frame.id, S.review)).label} layer` })),
     h('section', { class: 'card' }, tabs, ...body,
       h('div', { class: 'row' }, h('button', { type: 'button', class: 'btn', onclick: preview, disabled: !S.ready || (dr.mode === 'docs' && (!dr.docs.size || !dr.frames.size)), text: S.ready ? 'Preview draw' : 'Loading the corpus' }),
         r && count ? h('button', { type: 'button', class: 'btn primary', onclick: lock, text: `Lock and save ${count} units` }) : null,
@@ -222,12 +241,17 @@ export function modeBar(root) {
 export function renderVerify(root) {
   const frames = verifiableFrames();
   if (!S.review.first_layer || !frames.length) { root.replaceChildren(h('div', { class: 'page' }, h('h1', { text: 'Verify' }), h('p', { class: 'muted', text: 'This review has no coded layer to verify yet.' }))); return; }
-  if (!V.frame || !frames.find((f) => f.id === V.frame)) V.frame = frames[0].id;
-  const baseFrame = S.frames[V.frame];
+  // open on a frame that holds items for this coder, so a coder whose sample is on a second frame lands on it
+  const mineIn = (f) => S.samples.some((x) => x.frame === f.id && x.layer === layerOf(f.id, S.review) && x.coders && x.assigned && (x.units || []).length);
+  // the default is worked out afresh until loading ends: samples on other layers are not known before then
+  const frameId = frames.find((f) => f.id === V.frame) ? V.frame : (frames.find(mineIn) || frames[0]).id;
+  if (S.ready) V.frame = frameId;
+  const baseFrame = S.frames[frameId];
   if (V.sampleId === '__new') { renderSampler(root, baseFrame); return; }
   if (V.mode === 'doc' && !feature('document_view')) V.mode = 'fragment';
   if (V.mode === 'doc') { renderDocView(root); return; }
-  const samples = S.samples.filter((s) => s.frame === baseFrame.id && s.layer === S.review.first_layer);
+  S.frameInView = baseFrame.id; // the header's orientation and codebook follow the frame in view
+  const samples = S.samples.filter((s) => s.frame === baseFrame.id && s.layer === layerOf(baseFrame.id, S.review));
   if (!samples.length || V.sampleId === '__new') { renderSampler(root, baseFrame); return; }
   const sample = currentSample(baseFrame);
   const frame = frameFor(baseFrame, sample);
@@ -244,7 +268,7 @@ export function renderVerify(root) {
   const stOf = (u) => idx.get(u.unit) || { fields: {}, done: false };
   const doneN = queue.filter((u) => stOf(u).done).length;
   if (V.orient || shouldOpen(sample, doneN)) {
-    root.replaceChildren(orientationPage(() => { markSeen(sample.id); V.orient = false; renderVerify(root); window.scrollTo(0, 0); }));
+    root.replaceChildren(orientationPage(() => { markSeen(sample.id); V.orient = false; renderVerify(root); window.scrollTo(0, 0); }, 'Start coding', frame.id));
     return;
   }
   const unsureN = queue.filter((u) => Object.values(stOf(u).fields).some((e) => e.action === 'unsure')).length;
@@ -259,11 +283,11 @@ export function renderVerify(root) {
   const prev = () => goto(queue[qi - 1]);
 
   const doc = S.docById.get(cur.doc);
-  const unit = findUnit(cur.doc, cur.unit);
+  const unit = findUnit(cur.doc, cur.unit, frame.id);
   const codes = firstCodes(cur.doc, cur.unit, frame.id) || {};
   const st = stOf(cur);
   const events = docEvents(cur.doc);
-  const extras = firstExtras(cur.doc, cur.unit);
+  const extras = firstExtras(cur.doc, cur.unit, frame.id);
   const list = unitList(cur.doc);
   const ui = list.findIndex((u) => u.id === cur.unit);
   const para = unit && unit.kind === 'paragraph';
@@ -271,8 +295,10 @@ export function renderVerify(root) {
   const mySubmit = sample.coders && submitted(docEvents(SAMPLES_DOC), sample.id).has(S.handle);
   const act = (field, action, value) => { addEvent(cur.doc, 'verify', { sample: sample.id, unit: cur.unit, frame: frame.id, field: field.id, action, value: value ?? null }); };
   const note = (field, text) => { addEvent(cur.doc, 'note', { sample: sample.id, unit: cur.unit, frame: frame.id, field: field.id, text }); };
-  const open = unresolved(frame, codes, st);
-  const agreeRest = () => { for (const f of open) if (!badParent(frame, f, codes, st)) act(f, 'agree'); };
+  // a question sample (the heading sample) asks one question per item in place of checking codes
+  const q = sample.answers === 'question' && sample.question ? sample.question : null;
+  const open = q ? (st.fields[QFIELD.id] ? [] : [{ id: QFIELD.id, label: 'the question' }]) : unresolved(frame, codes, st);
+  const agreeRest = () => { if (q) return; for (const f of open) if (!badParent(frame, f, codes, st)) act(f, 'agree'); };
   const finish = () => { addEvent(cur.doc, 'done', { sample: sample.id, unit: cur.unit, frame: frame.id }); };
 
   // sidebar
@@ -293,7 +319,7 @@ export function renderVerify(root) {
     h('section', { class: 'card' }, h('h2', { text: 'Queue' }),
       h('div', { class: 'pills' }, [['todo', 'To do'], ['unsure', 'Unsure'], ['done', 'Done'], ['all', 'All']].map(([k, l]) => h('button', { type: 'button', class: 'pill' + (V.filter === k ? ' on' : ''), onclick: () => { V.filter = k; V.unit = null; renderVerify(root); } }, l))),
       h('div', { class: 'qlist' }, (() => { const a = shown.findIndex((u) => u.unit === cur.unit); const b = a >= 0 ? Math.max(0, a - 3) : Math.max(0, shown.findIndex((u) => queue.indexOf(u) > qi)); return shown.slice(b, b + 12); })().map((u) => {
-        const un = findUnit(u.doc, u.unit); const s = stOf(u);
+        const un = findUnit(u.doc, u.unit, frame.id); const s = stOf(u);
         return h('button', { type: 'button', class: 'qi' + (u.unit === cur.unit ? ' cur' : ''), onclick: () => goto(u) },
           h('span', { class: 'qs ' + (s.done ? 'd' : Object.keys(s.fields).length ? 'p' : '') }), h('span', { class: 'qt' }, sample.coders ? h('b', { class: 'mono', text: `${u.order[S.handle]}. ` }) : null, h('b', { class: 'mono', text: u.unit }), h('span', { text: ' ' + ((un && (un.label || un.text)) || '').slice(0, 60) })));
       })), h('div', { class: 'muted', text: `${shown.length} shown` })),
@@ -301,7 +327,7 @@ export function renderVerify(root) {
       strata.map(([k, s]) => h('div', { class: 'sg' }, h('div', { class: 'sgl' }, h('span', null, h('span', { class: 'dot', style: { background: colourFor(k) } }), ' ' + k), h('span', { class: 'mono muted', text: `${sdone[k] || 0}/${stot[k] || 0}` })), bar((stot[k] ? (sdone[k] || 0) / stot[k] : 0), colourFor(k)))))
   );
 
-  const rows = fieldRows(frame, codes, st, { act, note, locked: mySubmit, sel: V.fieldIdx, setSel: (i) => { V.fieldIdx = i; }, pk: '', rerender: () => renderVerify(root), root });
+  const rows = q ? questionRows(q, st, { act, note, locked: mySubmit }) : fieldRows(frame, codes, st, { act, note, locked: mySubmit, sel: V.fieldIdx, setSel: (i) => { V.fieldIdx = i; }, pk: '', rerender: () => renderVerify(root), root });
 
   // first coder's memo and rationale stay hidden until the unit is done
   const hidden = !st.done;
@@ -314,7 +340,7 @@ export function renderVerify(root) {
     h('div', { class: 'uh' },
       h('div', null, h('div', { class: 'muted', text: sample.coders ? `Item ${cur.order[S.handle]} of ${queue.length}` : `Unit ${qi + 1} of ${queue.length}` }), h('div', { class: 'mono', text: `${cur.doc} · ${cur.unit}${unit && unit.page ? ' · p. ' + unit.page : ''}` })),
       h('div', { class: 'row' }, h('a', { href: `#/doc/${encodeURIComponent(cur.doc)}`, class: 'btn', text: 'Document profile' }),
-        !feature('pdf') ? null : h('button', { type: 'button', class: 'btn', disabled: !(doc && pdfParts(doc).some((x) => S.store.has(x.file))), title: doc && pdfParts(doc).some((x) => S.store.has(x.file)) ? 'Opens the PDF on this page and copies the first words of the passage, to search for' : 'The PDF is not in the data repo yet', onclick: () => openPdf(doc, unit && unit.page, unit && unit.text, unit && (unit.flags || []).includes('page-printed')) }, 'Open PDF'),
+        !feature('pdf') ? null : h('button', { type: 'button', class: 'btn', disabled: !(doc && pdfParts(doc).some((x) => S.store.has(x.file))), title: doc && pdfParts(doc).some((x) => S.store.has(x.file)) ? `Opens the PDF on this page and copies the first words of the ${unitLabel(frame.id, S.review)}, to search for` : 'The PDF is not in the data repo yet', onclick: () => openPdf(doc, unit && unit.page, unit && unit.text, unit && (unit.flags || []).includes('page-printed'), unitLabel(frame.id, S.review)) }, 'Open PDF'),
         h('button', { type: 'button', class: 'btn', onclick: prev, disabled: qi <= 0 }, 'Previous'), h('button', { type: 'button', class: 'btn', onclick: next }, 'Skip'))),
     h('div', { class: 'dt', text: doc ? doc.title : cur.doc }),
     para ? ctx(list[ui - 1], 'Before') : null,
@@ -337,7 +363,7 @@ export function renderVerify(root) {
           h('button', { type: 'button', class: 'btn primary', disabled: open.length > 0, onclick: () => { finish(); setTimeout(next, 0); } }, 'Done, next unit'),
           open.length ? h('span', { class: 'muted', text: `${open.length} field${open.length > 1 ? 's' : ''} left: ${open.map((f) => f.label).join(', ')}` }) : null)));
 
-  const task = taskLine(() => { V.orient = true; renderVerify(root); window.scrollTo(0, 0); });
+  const task = taskLine(() => { V.orient = true; renderVerify(root); window.scrollTo(0, 0); }, frame.id);
   root.replaceChildren(modeBar(root), h('div', { class: 'vwrap' }, aside, h('div', { class: 'vmain' }, task, card)));
 
   // keyboard
@@ -349,6 +375,8 @@ export function renderVerify(root) {
     if (k === 'arrowdown') { V.fieldIdx = Math.min(frame.fields.length - 1, V.fieldIdx + 1); V.picker = null; renderVerify(root); }
     else if (k === 'arrowup') { V.fieldIdx = Math.max(0, V.fieldIdx - 1); V.picker = null; renderVerify(root); }
     else if (k === 'j') next(); else if (k === 'k') prev();
+    else if (q && /^[1-9]$/.test(k) && q.options[Number(k) - 1]) act(QFIELD, 'answer', q.options[Number(k) - 1]);
+    else if (q && 'adou'.includes(k)) return false;
     else if (k === 'a' && ev.shiftKey) agreeRest();
     else if (k === 'a') { const e2 = ACTIONS[0]; if (!badParent(frame, f, codes, st)) act(f, e2[0]); }
     else if (k === 'd') { if ((codes[f.id] ?? null) != null) act(f, 'disagree'); }

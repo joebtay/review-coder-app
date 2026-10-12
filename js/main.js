@@ -8,7 +8,7 @@ import { renderVerify, V } from './verify.js';
 import { renderScreen, SC } from './screen.js';
 import { renderAgreement } from './agreement.js';
 import { feature } from './features.js';
-import { orientationPage, hasOrientation } from './orientation.js';
+import { orientationPage, anyHasOrientation, orientationFrame } from './orientation.js';
 
 const NAV = [['project', 'Project'], ['documents', 'Documents'], ['screen', 'Screen'], ['code', 'Code'], ['verify', 'Verify'], ['agreement', 'Agreement'], ['overview', 'Overview']];
 const CFG = 'rc:config';
@@ -85,7 +85,7 @@ function buildShell(handle) {
       h('div', { class: 'brand' }, h('div', { class: 'logo' }, '≡'), h('div', null, h('b', { text: 'Review Coder' }), h('div', { class: 'muted small', text: S.review.title }))),
       nav,
       h('div', { class: 'right' }, pill,
-        hasOrientation() ? h('a', { href: '#/orientation', class: 'btn small', id: 'orient-header', title: 'The three questions, their definitions and worked examples' }, 'How the codes work') : null,
+        anyHasOrientation() ? h('a', { href: '#/orientation', class: 'btn small', id: 'orient-header', title: 'The questions, their definitions and worked examples' }, 'How the codes work') : null,
         S.review.codebook || Object.keys(S.frames || {}).length ? h('button', { type: 'button', class: 'btn small', onclick: () => toggleCodebook(), title: 'Show definitions (?)' }, 'Codebook') : null,
         h('div', { class: 'who', title: handle }, h('span', { class: 'av', text: handle.slice(0, 2).toUpperCase() }), h('span', { class: 'muted small', text: handle })),
         h('button', { type: 'button', class: 'btn small', onclick: () => { if (S.sync && S.sync.pending() && !confirm(`${S.sync.pending()} changes have not reached GitHub yet. They stay saved on this device. Sign out anyway?`)) return; try { localStorage.removeItem(CFG); } catch {} location.hash = ''; location.reload(); } }, 'Sign out'))),
@@ -131,7 +131,7 @@ function route() {
   else if (page === 'doc') renderDocProfile(main, decodeURIComponent(parts[1] || ''));
   else if (page === 'verify') renderVerify(main);
   else if (page === 'screen') renderScreen(main);
-  else if (page === 'orientation' && hasOrientation()) main.replaceChildren(orientationPage(() => { location.hash = '#/verify'; }, 'Back to coding'));
+  else if (page === 'orientation' && anyHasOrientation()) main.replaceChildren(orientationPage(() => { location.hash = '#/verify'; }, 'Back to coding', orientationFrame()));
   else if (page === 'agreement') renderAgreement(main);
   else main.replaceChildren(h('div', { class: 'page' }, h('h1', { text: NAV.find((n) => n[0] === page)?.[1] || 'Not found' }), h('p', { class: 'muted', text: page === 'overview' ? 'The matrix and audit trail arrive in stage 4.' : 'This module arrives in stage 5.' })));
   renderCodebook(true);
