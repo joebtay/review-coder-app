@@ -4,6 +4,7 @@ import { screenPairs, SC } from './screen.js';
 import { h, chip, pct } from './ui.js';
 import { openCodebook } from './codebook.js';
 import { V } from './verify.js';
+import { themeConfig } from './themes.js';
 
 const FLOOR = 0.67;
 
@@ -29,7 +30,8 @@ export function collectPairs(frame) {
 }
 
 export function renderAgreement(root) {
-  const frames = Object.values(S.frames).filter((f) => S.samples.some((s) => s.frame === f.id));
+  const theme = (themeConfig(S.review) || {}).frame; // checked code by code in the Themes views; agreement for it is not built yet
+  const frames = Object.values(S.frames).filter((f) => f.id !== theme && S.samples.some((s) => s.frame === f.id));
   const body = [];
   if (!S.ready) body.push(h('p', { class: 'muted', text: `Loading ${S.loading.done} of ${S.loading.total} files` }));
   else if (!frames.length) body.push(h('p', { class: 'muted', text: 'No sample has been drawn yet. Draw one on the Verify screen.' }));

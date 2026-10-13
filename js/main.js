@@ -9,8 +9,10 @@ import { renderScreen, SC } from './screen.js';
 import { renderAgreement } from './agreement.js';
 import { feature } from './features.js';
 import { orientationPage, anyHasOrientation, orientationFrame } from './orientation.js';
+import { renderThemes } from './themeview.js';
 
-const NAV = [['project', 'Project'], ['documents', 'Documents'], ['screen', 'Screen'], ['code', 'Code'], ['verify', 'Verify'], ['agreement', 'Agreement'], ['overview', 'Overview']];
+const NAV = [['project', 'Project'], ['documents', 'Documents'], ['screen', 'Screen'], ['code', 'Code'], ['verify', 'Verify'], ['themes', 'Themes'], ['agreement', 'Agreement'], ['overview', 'Overview']];
+const themesOn = () => feature('themes_by_document') || feature('themes_by_code');
 const CFG = 'rc:config';
 const app = document.getElementById('app');
 let shell = null, main = null, pill = null, pendingRender = false;
@@ -79,7 +81,7 @@ function offlineScreen(store, conf, remember, e) {
 function buildShell(handle) {
   pill = h('div', { class: 'syncpill' });
   main = h('main', { id: 'main' });
-  const nav = h('nav', { 'aria-label': 'Workspace' }, NAV.filter(([k]) => feature(k)).map(([k, l]) => h('a', { href: `#/${k}`, 'data-k': k, text: l })));
+  const nav = h('nav', { 'aria-label': 'Workspace' }, NAV.filter(([k]) => (k === 'themes' ? themesOn() : feature(k))).map(([k, l]) => h('a', { href: `#/${k}`, 'data-k': k, text: l })));
   shell = h('div', { class: 'shell' },
     h('header', { class: 'top' },
       h('div', { class: 'brand' }, h('div', { class: 'logo' }, '≡'), h('div', null, h('b', { text: 'Review Coder' }), h('div', { class: 'muted small', text: S.review.title }))),
@@ -119,23 +121,26 @@ document.addEventListener('focusout', () => { if (pendingRender) { pendingRender
 function route() {
   if (!main) return;
   const parts = location.hash.replace(/^#\/?/, '').split('/');
-  const page = parts[0] || 'project';
+  const page = (parts[0] || 'project').split('?')[0];
   shell.querySelectorAll('nav a').forEach((a) => a.classList.toggle('on', a.dataset.k === page || (page === 'doc' && a.dataset.k === 'documents') || (page === 'protocol' && a.dataset.k === 'project')));
   const y = window.scrollY;
   const off = { documents: 'documents', doc: 'documents', verify: 'verify', screen: 'screen', agreement: 'agreement', overview: 'overview', code: 'code' }[page];
-  if (off && !feature(off)) main.replaceChildren(h('div', { class: 'page narrow' }, h('h1', { text: NAV.find((n) => n[0] === page)?.[1] || 'Not available' }),
+  if (page === 'themes' && !themesOn()) main.replaceChildren(h('div', { class: 'page narrow' }, h('h1', { text: 'Themes' }),
+    h('p', { class: 'muted', text: 'This part of the platform is not switched on for this review yet.' }), h('p', null, h('a', { href: '#/project', text: 'Back to the project' }))));
+  else if (off && !feature(off)) main.replaceChildren(h('div', { class: 'page narrow' }, h('h1', { text: NAV.find((n) => n[0] === page)?.[1] || 'Not available' }),
     h('p', { class: 'muted', text: 'This part of the platform is not switched on for this review yet.' }), h('p', null, h('a', { href: '#/project', text: 'Back to the project' }))));
   else if (page === 'project') renderProject(main);
   else if (page === 'protocol') renderProtocol(main);
   else if (page === 'documents') renderDocuments(main);
   else if (page === 'doc') renderDocProfile(main, decodeURIComponent(parts[1] || ''));
   else if (page === 'verify') renderVerify(main);
+  else if (page === 'themes') renderThemes(main, parts.slice(1).map((x) => x.split('?')[0]));
   else if (page === 'screen') renderScreen(main);
   else if (page === 'orientation' && anyHasOrientation()) main.replaceChildren(orientationPage(() => { location.hash = '#/verify'; }, 'Back to coding', orientationFrame()));
   else if (page === 'agreement') renderAgreement(main);
   else main.replaceChildren(h('div', { class: 'page' }, h('h1', { text: NAV.find((n) => n[0] === page)?.[1] || 'Not found' }), h('p', { class: 'muted', text: page === 'overview' ? 'The matrix and audit trail arrive in stage 4.' : 'This module arrives in stage 5.' })));
   renderCodebook(true);
-  if (page !== 'verify' && page !== 'screen') window.scrollTo(0, y);
+  if (page !== 'verify' && page !== 'screen' && page !== 'themes') window.scrollTo(0, y);
 }
 window.addEventListener('hashchange', () => { if (main) { route(); window.scrollTo(0, 0); } });
 

@@ -11,6 +11,7 @@ import { frameFor, submitted, unblinded, SAMPLES_DOC, defaultSample } from './as
 import { feature } from './features.js';
 import { shouldOpen, markSeen, orientationPage, taskLine } from './orientation.js';
 import { layerOf, unitLabel } from './settings.js';
+import { themeConfig } from './themes.js';
 
 export const V = { mode: 'fragment', pick: {}, frame: null, sampleId: null, filter: 'todo', unit: null, fieldIdx: 0, picker: null, pickQ: '', draft: null };
 
@@ -24,7 +25,8 @@ export const docOrder = () => new Map(S.docs.map((d, i) => [d.id, i]));
 export function verifiableFrames() {
   const first = S.review.layers.find((l) => l.id === S.review.first_layer);
   const sampled = new Set(S.samples.map((x) => x.frame));
-  return Object.values(S.frames).filter((f) => (first && (first.frames || []).includes(f.id))
+  const theme = (themeConfig(S.review) || {}).frame; // verified code by code in the Themes views, not here
+  return Object.values(S.frames).filter((f) => f.id !== theme).filter((f) => (first && (first.frames || []).includes(f.id))
     || (sampled.has(f.id) && S.samples.some((x) => x.frame === f.id && x.layer === layerOf(f.id, S.review))));
 }
 

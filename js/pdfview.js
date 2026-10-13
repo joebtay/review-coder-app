@@ -3,7 +3,9 @@
 import { h } from './ui.js';
 
 let lib = null, viewerMod = null;
-async function load() {
+/** The PDF.js library and viewer module, once loaded. */
+export const pdfjs = () => ({ lib, viewerMod });
+export async function load() {
   if (lib) return;
   if (!document.querySelector('link[data-pdfjs]')) document.head.append(h('link', { rel: 'stylesheet', href: 'vendor/pdfjs/pdf_viewer.css', 'data-pdfjs': '1' }));
   lib = await import('../vendor/pdfjs/pdf.min.mjs');
