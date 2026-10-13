@@ -10,11 +10,8 @@ import { renderAgreement } from './agreement.js';
 import { feature } from './features.js';
 import { orientationPage, anyHasOrientation, orientationFrame } from './orientation.js';
 import { renderThemes } from './themeview.js';
-import { renderSetup, SU } from './setup.js';
-import { renderReporting } from './reporting.js';
-import { isPI } from './setuprules.js';
 
-const NAV = [['project', 'Project'], ['documents', 'Documents'], ['screen', 'Screen'], ['code', 'Code'], ['verify', 'Verify'], ['themes', 'Themes'], ['agreement', 'Agreement'], ['reporting', 'Reporting'], ['overview', 'Overview']];
+const NAV = [['project', 'Project'], ['documents', 'Documents'], ['screen', 'Screen'], ['code', 'Code'], ['verify', 'Verify'], ['themes', 'Themes'], ['agreement', 'Agreement'], ['overview', 'Overview']];
 const themesOn = () => feature('themes_by_document') || feature('themes_by_code');
 const CFG = 'rc:config';
 const app = document.getElementById('app');
@@ -63,8 +60,6 @@ async function start(store, conf, remember) {
     const u = await store.user();
     await store.init();
     if (conf && remember) saveCfg(conf);
-    // a repo with no review.json yet is a new project: it opens on the set-up page, for the person signing in
-    if (!store.has('review.json')) { S.store = store; S.handle = u.login; main = h('main', { id: 'main' }); app.replaceChildren(main); await renderSetup(main, { fresh: true }); return; }
     await loadReview(store, u.login);
     buildShell(u.login);
     route();
@@ -92,7 +87,6 @@ function buildShell(handle) {
       h('div', { class: 'brand' }, h('div', { class: 'logo' }, '≡'), h('div', null, h('b', { text: 'Review Coder' }), h('div', { class: 'muted small', text: S.review.title }))),
       nav,
       h('div', { class: 'right' }, pill,
-        isPI(handle, S.review) ? h('a', { href: '#/setup', class: 'btn small', id: 'setup-header', title: 'The modules this project uses and their options' }, 'Set-up') : null,
         anyHasOrientation() ? h('a', { href: '#/orientation', class: 'btn small', id: 'orient-header', title: 'The questions, their definitions and worked examples' }, 'How the codes work') : null,
         S.review.codebook || Object.keys(S.frames || {}).length ? h('button', { type: 'button', class: 'btn small', onclick: () => toggleCodebook(), title: 'Show definitions (?)' }, 'Codebook') : null,
         h('div', { class: 'who', title: handle }, h('span', { class: 'av', text: handle.slice(0, 2).toUpperCase() }), h('span', { class: 'muted small', text: handle })),
@@ -128,10 +122,9 @@ function route() {
   if (!main) return;
   const parts = location.hash.replace(/^#\/?/, '').split('/');
   const page = (parts[0] || 'project').split('?')[0];
-  if (page !== 'setup') SU.loaded = false; // the set-up page re-reads both files each time it opens
   shell.querySelectorAll('nav a').forEach((a) => a.classList.toggle('on', a.dataset.k === page || (page === 'doc' && a.dataset.k === 'documents') || (page === 'protocol' && a.dataset.k === 'project')));
   const y = window.scrollY;
-  const off = { documents: 'documents', doc: 'documents', verify: 'verify', screen: 'screen', agreement: 'agreement', overview: 'overview', code: 'code', reporting: 'reporting' }[page];
+  const off = { documents: 'documents', doc: 'documents', verify: 'verify', screen: 'screen', agreement: 'agreement', overview: 'overview', code: 'code' }[page];
   if (page === 'themes' && !themesOn()) main.replaceChildren(h('div', { class: 'page narrow' }, h('h1', { text: 'Themes' }),
     h('p', { class: 'muted', text: 'This part of the platform is not switched on for this review yet.' }), h('p', null, h('a', { href: '#/project', text: 'Back to the project' }))));
   else if (off && !feature(off)) main.replaceChildren(h('div', { class: 'page narrow' }, h('h1', { text: NAV.find((n) => n[0] === page)?.[1] || 'Not available' }),
@@ -145,8 +138,6 @@ function route() {
   else if (page === 'screen') renderScreen(main);
   else if (page === 'orientation' && anyHasOrientation()) main.replaceChildren(orientationPage(() => { location.hash = '#/verify'; }, 'Back to coding', orientationFrame()));
   else if (page === 'agreement') renderAgreement(main);
-  else if (page === 'reporting') renderReporting(main);
-  else if (page === 'setup') renderSetup(main);
   else main.replaceChildren(h('div', { class: 'page' }, h('h1', { text: NAV.find((n) => n[0] === page)?.[1] || 'Not found' }), h('p', { class: 'muted', text: page === 'overview' ? 'The matrix and audit trail arrive in stage 4.' : 'This module arrives in stage 5.' })));
   renderCodebook(true);
   if (page !== 'verify' && page !== 'screen' && page !== 'themes') window.scrollTo(0, y);

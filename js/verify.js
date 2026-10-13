@@ -341,7 +341,7 @@ export function renderVerify(root) {
   const card = h('section', { class: 'card ucard' },
     h('div', { class: 'uh' },
       h('div', null, h('div', { class: 'muted', text: sample.coders ? `Item ${cur.order[S.handle]} of ${queue.length}` : `Unit ${qi + 1} of ${queue.length}` }), h('div', { class: 'mono', text: `${cur.doc} · ${cur.unit}${unit && unit.page ? ' · p. ' + unit.page : ''}` })),
-      h('div', { class: 'row' }, feature('documents') ? h('a', { href: `#/doc/${encodeURIComponent(cur.doc)}`, class: 'btn', text: 'Document profile' }) : null,
+      h('div', { class: 'row' }, h('a', { href: `#/doc/${encodeURIComponent(cur.doc)}`, class: 'btn', text: 'Document profile' }),
         !feature('pdf') ? null : h('button', { type: 'button', class: 'btn', disabled: !(doc && pdfParts(doc).some((x) => S.store.has(x.file))), title: doc && pdfParts(doc).some((x) => S.store.has(x.file)) ? `Opens the PDF on this page and copies the first words of the ${unitLabel(frame.id, S.review)}, to search for` : 'The PDF is not in the data repo yet', onclick: () => openPdf(doc, unit && unit.page, unit && unit.text, unit && (unit.flags || []).includes('page-printed'), unitLabel(frame.id, S.review)) }, 'Open PDF'),
         h('button', { type: 'button', class: 'btn', onclick: prev, disabled: qi <= 0 }, 'Previous'), h('button', { type: 'button', class: 'btn', onclick: next }, 'Skip'))),
     h('div', { class: 'dt', text: doc ? doc.title : cur.doc }),
