@@ -1,5 +1,5 @@
 import { S, docEvents, allEvents, firstCodes, unitList, notCoded, layerFlags } from './data.js';
-import { layerOf } from './settings.js';
+import { layerOf, sameLayer } from './settings.js';
 import { h, bar, pct, colourFor, chip, mdToHtml } from './ui.js';
 import { openCodebook } from './codebook.js';
 import { queriesSection } from './queries.js';
@@ -44,7 +44,7 @@ export function codedProgress() {
     // both are left out of the frame's total, as are units another layer adds
     let coded = 0, ftotal = 0;
     for (const d of S.docs) for (const u of unitList(d.id)) {
-      if (u.excluded || (u.layer && u.layer !== lid) || notCoded(d.id, u.id, fr.id) || layerFlags(d.id, u.id, fr.id).includes('held')) continue;
+      if (u.excluded || (u.layer && !sameLayer(u.layer, lid, S.review)) || notCoded(d.id, u.id, fr.id) || layerFlags(d.id, u.id, fr.id).includes('held')) continue;
       ftotal++;
       if (firstCodes(d.id, u.id, fr.id)) coded++;
     }

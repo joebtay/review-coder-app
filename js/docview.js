@@ -6,8 +6,8 @@ import { h, colourFor, bar, pct } from './ui.js';
 import { textPane, whereText, saveScroll, restoreScroll, pagesFor } from './fulltext.js';
 import { frameFor, submitted, unblinded, blindSamplesFor, SAMPLES_DOC } from './assign.js';
 import { passagesFor, passageSpans, rangeOffsets, isCode, passagesCSV } from './passages.js';
-import { layerOf, newCodeFields } from './settings.js';
-import { V, renderVerify, modeBar, verifiableFrames, indexMine, unresolved, badParent, fieldRows, docOrder, currentSample } from './verify.js';
+import { layerOf, newCodeFields, sameLayer } from './settings.js';
+import { V, renderVerify, modeBar, verifiableFrames, indexMine, unresolved, badParent, fieldRows, docOrder, currentSample, verifyOpts } from './verify.js';
 
 export const D = { doc: null, task: null, fidx: 0, tab: null, filter: 'todo', scroll: null, keep: null, sel: null, np: null, msg: null };
 
@@ -23,7 +23,7 @@ function buildTasks(active) {
   const byDoc = new Map();
   const ord = docOrder();
   for (const { frame: base, sample } of active) {
-    const frame = frameFor(base, sample);
+    const frame = frameFor(base, sample, verifyOpts(base.id, sample));
     const mine = indexMine(sample);
     for (const u of sample.units) {
       if (!byDoc.has(u.doc)) byDoc.set(u.doc, []);
@@ -94,7 +94,7 @@ export function renderDocView(root) {
       }), shownDocs.length ? null : h('p', { class: 'muted', text: D.filter === 'todo' ? 'Every document is finished.' : 'None.' }))),
     h('section', { class: 'card' }, h('h2', { text: 'Samples in use' }),
       h('p', { class: 'muted small', text: 'The same samples as the fragment view. Work done in either view counts.' }),
-      active.map(({ frame, sample }) => { const ss = S.samples.filter((x) => x.frame === frame.id && x.layer === layerOf(frame.id, S.review));
+      active.map(({ frame, sample }) => { const ss = S.samples.filter((x) => x.frame === frame.id && sameLayer(x.layer, layerOf(frame.id, S.review), S.review));
         return ss.length > 1 ? h('label', { class: 'sel' }, frame.name, h('select', { onchange: (e) => { V.pick[frame.id] = e.target.value; D.task = null; rr(); } }, ss.map((x) => h('option', { value: x.id, selected: x.id === sample.id, text: `${x.id} \u00b7 ${x.units.length} units${x.mode === 'documents' ? ' (whole documents)' : ''}` }))))
           : h('div', { class: 'muted small', text: `${frame.name}: ${sample.id} \u00b7 ${sample.units.length} units` }); }),
       h('button', { type: 'button', class: 'link', onclick: () => { V.sampleId = '__new'; V.draft = null; rr(); } }, 'Draw another sample')),
@@ -197,7 +197,7 @@ export function renderDocView(root) {
     if (D.sel) {
       // a new code takes the fields the review sets for the frame (frame_settings new_codes), not a fixed list
       const ncBase = (blindSample && S.frames[blindSample.frame]) || S.frames[active[0].frame.id];
-      const frame = frameFor(ncBase, blindSample);
+      const frame = frameFor(ncBase, blindSample, verifyOpts(ncBase.id, blindSample));
       const ncIds = newCodeFields(frame, blindSample, S.review);
       const fields = frame.fields.filter((f) => ncIds.includes(f.id));
       const np = D.np || (D.np = { mode: null, codes: {}, comment: '' });

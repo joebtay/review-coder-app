@@ -10,13 +10,22 @@ export function viewFor(sample, handle) {
   return { ...sample, all_units: sample.units, units: mine, assigned: !!sample.coders[handle] };
 }
 
-/** A frame limited to the sample's fields, with the sample's definitions and answer set. */
-export function frameFor(frame, sample) {
-  if (!sample || (!sample.fields && !sample.definitions && !sample.answers)) return frame;
-  const keep = sample.fields ? new Set(sample.fields) : null;
+/** A frame limited to the sample's fields, with the sample's definitions and answer set.
+ *  opts (from the frame's settings, settings.js): addFields, fields shown besides the sample's own, in the frame's order,
+ *  so a locked sample is never edited to add a check (secondary function and form, PI ruling 28b, 16 October 2026);
+ *  confirm, fields whose blank first code still needs an answer (each gets confirm_blank: true). */
+export function frameFor(frame, sample, opts = {}) {
+  const add = new Set(opts.addFields || []);
+  const confirm = opts.confirm || new Set();
+  if (!sample || (!sample.fields && !sample.definitions && !sample.answers)) {
+    if (!confirm.size) return frame;
+    return { ...frame, fields: frame.fields.map((f) => (confirm.has(f.id) ? { ...f, confirm_blank: true } : f)) };
+  }
+  const keep = sample.fields ? new Set([...sample.fields, ...add]) : null;
   const defs = sample.definitions || {};
   const fields = frame.fields.filter((f) => !keep || keep.has(f.id)).map((f) => ({
     ...f,
+    ...(confirm.has(f.id) ? { confirm_blank: true } : {}),
     values: f.values.map((v) => { const d = defs[`${f.id}|${v.id}`]; return d ? { ...v, definition: d.definition, source: d.source } : v; }),
   }));
   return { ...frame, fields, answers: sample.answers || null };

@@ -4,7 +4,7 @@ import { mergeEvents, makeEvent, cmp } from './events.js';
 import { Sync } from './sync.js';
 import { corpusUnits, corpusDocs } from './tier.js';
 import { viewFor, hiddenUnits, visible, submitted, SAMPLES_DOC, LOCKED_AFTER_SUBMIT } from './assign.js';
-import { layerOf, layerIds } from './settings.js';
+import { layerOf, layerIds, withExtraFields, supersededIds } from './settings.js';
 
 export const S = {
   store: null, handle: null, review: null, frames: {}, docs: [], docById: new Map(),
@@ -27,7 +27,8 @@ export async function loadReview(store, handle) {
   S.handle = handle;
   S.review = await store.readJSON('review.json');
   S.frames = {};
-  for (const f of S.review.frames || []) if (store.has(`frames/${f}.json`)) S.frames[f] = await store.readJSON(`frames/${f}.json`);
+  // a frame setting may add fields (extra_fields, such as a secondary form); the frame file is never altered
+  for (const f of S.review.frames || []) if (store.has(`frames/${f}.json`)) S.frames[f] = withExtraFields(await store.readJSON(`frames/${f}.json`), S.review);
   S.docs = corpusDocs(store.has('documents/index.json') ? await store.readJSON('documents/index.json') : [], S.review);
   S.docById = new Map(S.docs.map((d) => [d.id, d]));
   S.queries = store.has('queries.json') ? await store.readJSON('queries.json') : [];
@@ -78,7 +79,9 @@ export async function loadRest() {
     tick();
   });
   // a layer may add units of its own (its units block, "add": true), charted in that layer only; units/ is never altered
-  for (const [lid, docs] of S.layers) for (const [doc, d] of docs) for (const [id, v] of Object.entries(d?.units || {})) {
+  // a layer that a newer layer supersedes adds none: its successor carries them
+  const replaced = supersededIds(review);
+  for (const [lid, docs] of S.layers) if (!replaced.has(lid)) for (const [doc, d] of docs) for (const [id, v] of Object.entries(d?.units || {})) {
     const list = S.units.get(doc) || [];
     if (!v.add || list.some((x) => x.id === id)) continue;
     const { add, change, was, ...u } = v;

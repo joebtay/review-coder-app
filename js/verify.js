@@ -10,7 +10,7 @@ import { renderDocView } from './docview.js';
 import { frameFor, submitted, unblinded, SAMPLES_DOC, defaultSample } from './assign.js';
 import { feature } from './features.js';
 import { shouldOpen, markSeen, orientationPage, taskLine } from './orientation.js';
-import { layerOf, unitLabel } from './settings.js';
+import { layerOf, unitLabel, sameLayer, verifyAddFields, confirmBlank } from './settings.js';
 import { themeConfig } from './themes.js';
 
 export const V = { mode: 'fragment', pick: {}, frame: null, sampleId: null, filter: 'todo', unit: null, fieldIdx: 0, picker: null, pickQ: '', draft: null };
@@ -27,7 +27,7 @@ export function verifiableFrames() {
   const sampled = new Set(S.samples.map((x) => x.frame));
   const theme = (themeConfig(S.review) || {}).frame; // verified code by code in the Themes views, not here
   return Object.values(S.frames).filter((f) => f.id !== theme).filter((f) => (first && (first.frames || []).includes(f.id))
-    || (sampled.has(f.id) && S.samples.some((x) => x.frame === f.id && x.layer === layerOf(f.id, S.review))));
+    || (sampled.has(f.id) && S.samples.some((x) => x.frame === f.id && sameLayer(x.layer, layerOf(f.id, S.review), S.review))));
 }
 
 export function sampleQueue(sample) {
@@ -62,9 +62,24 @@ export const effective = (codes, st, field, frame) => {
   return codes[field] ?? null;
 };
 
+/** The frame-setting fields a sample shows besides its own, and the fields whose blank code needs an answer (settings.js). */
+export function verifyOpts(frameId, sample) {
+  return { addFields: sample && sample.answers === 'question' ? [] : verifyAddFields(frameId, S.review), confirm: confirmBlank(frameId, S.review) };
+}
+
+/** The values a field offers for this unit: those of the chosen parent where the field depends on another. */
+export function optionsFor(frame, f, codes, st) {
+  if (!f.depends_on) return f.values;
+  const par = effective(codes, st, f.depends_on, frame);
+  return f.values.filter((v) => !v.parent || v.parent === par);
+}
+
+/** A blank first code that still needs an answer: a confirm_blank field ("None given") with values to choose from. */
+export const needsConfirm = (frame, f, codes, st) => !!f.confirm_blank && codes[f.id] == null && optionsFor(frame, f, codes, st).length > 0;
+
 export function unresolved(frame, codes, st) {
   const notes = st.notes || {};
-  return frame.fields.filter((f) => (!st.fields[f.id] && !(codes[f.id] == null && !f.required))
+  return frame.fields.filter((f) => (!st.fields[f.id] && !(codes[f.id] == null && !f.required && !needsConfirm(frame, f, codes, st)))
     || (wb(frame) && st.fields[f.id] && st.fields[f.id].action === 'disagree' && !(notes[f.id] || '').trim()));
 }
 
@@ -84,25 +99,25 @@ export function fieldRows(frame, codes, st, o) {
     const key = o.pk + f.id;
     const orig = codes[f.id] ?? null;
     const e = st.fields[f.id];
-    const implicit = !e && orig == null && !f.required;
+    const confirmIt = needsConfirm(frame, f, codes, st);
+    const implicit = !e && orig == null && !f.required && !confirmIt;
     const bp = badParent(frame, f, codes, st);
     const sel = i === o.sel;
     const vdef = (v) => f.values.find((x) => x.id === v);
     const btns = (wb(frame) ? ACTIONS_WB : ACTIONS).map(([a, label, k]) => h('button', { type: 'button', class: 'act ' + a + (e && e.action === a ? ' on' : ''), disabled: !!o.locked || (a === 'agree' && !!bp) || (a === 'disagree' && orig == null), title: `${label} (${k})`,
       onclick: (ev) => { ev.stopPropagation(); o.setSel(i); if (a === 'other') { V.picker = V.picker === key ? null : key; V.pickQ = ''; o.rerender(); } else { V.picker = null; o.act(f, a); } } }, label, h('kbd', { text: k })));
-    let options = f.values;
-    if (f.depends_on) { const par = effective(codes, st, f.depends_on, frame); options = f.values.filter((v) => !v.parent || v.parent === par); }
+    const options = optionsFor(frame, f, codes, st);
     const q = V.pickQ.toLowerCase();
     const pick = V.picker === key ? h('div', { class: 'picker' },
       options.length > 10 ? h('input', { type: 'text', placeholder: 'Filter', value: V.pickQ, oninput: (ev) => { V.pickQ = ev.target.value; o.rerender(); const el = o.root.querySelector('.picker input'); if (el) { el.focus(); el.setSelectionRange(V.pickQ.length, V.pickQ.length); } } }) : null,
       options.length ? options.filter((v) => !q || (v.label + v.definition).toLowerCase().includes(q)).map((v) => h('button', { type: 'button', class: 'po' + (e && e.value === v.id ? ' on' : ''), onclick: (ev) => { ev.stopPropagation(); V.picker = null; o.act(f, 'other', v.id); } },
         h('span', { class: 'dot', style: { background: colourFor(v.id) } }), h('b', { text: v.label }), h('span', { class: 'pd', text: v.definition || '' }))) : h('p', { class: 'muted', text: 'No values fit the chosen parent. Use Disagree.' }),
       f.required ? null : h('div', { class: 'muted', text: 'To make this field blank, use Disagree.' })) : null;
-    const status = !e ? (implicit ? 'Blank, nothing to check' : 'Not checked') : e.action === 'agree' ? 'Agreed' : e.action === 'disagree' ? (wb(frame) ? 'Disagreed: this code is wrong' : 'Disagreed: should be blank') : e.action === 'other' ? `Changed to ${e.value}` : 'Marked unsure';
+    const status = !e ? (implicit ? 'Blank, nothing to check' : confirmIt ? 'None given: Agree that there is none, or Other to add one' : 'Not checked') : e.action === 'agree' ? 'Agreed' : e.action === 'disagree' ? (wb(frame) ? 'Disagreed: this code is wrong' : 'Disagreed: should be blank') : e.action === 'other' ? `Changed to ${e.value}` : 'Marked unsure';
     return h('div', { class: 'frow' + (sel ? ' sel' : '') + (e ? ' ' + e.action : ''), onclick: () => { if (o.sel !== i) { o.setSel(i); o.rerender(); } } },
       h('div', { class: 'fl' }, h('div', { class: 'fn' }, h('b', { text: f.label }), f.required ? null : h('span', { class: 'muted', text: ' optional' }),
         h('button', { type: 'button', class: 'link', onclick: (ev) => { ev.stopPropagation(); openCodebook({ frame: frame.id, field: f.id, value: orig, tab: 'field' }); } }, 'Definitions')),
-        h('div', { class: 'fv' }, orig != null ? chip(orig, { onclick: (ev) => { ev.stopPropagation(); openCodebook({ frame: frame.id, field: f.id, value: orig, tab: 'field' }); } }) : h('span', { class: 'muted', text: '(blank)' }),
+        h('div', { class: 'fv' }, orig != null ? chip(orig, { onclick: (ev) => { ev.stopPropagation(); openCodebook({ frame: frame.id, field: f.id, value: orig, tab: 'field' }); } }) : h('span', { class: 'muted', text: f.confirm_blank ? 'None given' : '(blank)' }),
           e && e.action === 'other' ? h('span', { class: 'arrow' }, '→ ', chip(e.value, { onclick: (ev) => { ev.stopPropagation(); openCodebook({ frame: frame.id, field: f.id, value: e.value, tab: 'field' }); } })) : null,
           e && e.action === 'disagree' ? h('span', { class: 'arrow muted', text: '→ (blank)' }) : null),
         orig != null && vdef(orig) && vdef(orig).definition ? h('div', { class: 'fd', text: vdef(orig).definition }) : null,
@@ -132,7 +147,7 @@ export function questionRows(q, st, o) {
 
 /** The sample a frame is being verified in. Both views use the same one, so a coder can switch views at any time. */
 export function currentSample(frame) {
-  const ss = S.samples.filter((s) => s.frame === frame.id && s.layer === layerOf(frame.id, S.review)).sort((a, b) => (a.created < b.created ? -1 : 1));
+  const ss = S.samples.filter((s) => s.frame === frame.id && sameLayer(s.layer, layerOf(frame.id, S.review), S.review)).sort((a, b) => (a.created < b.created ? -1 : 1));
   // Only a coder's own pick is kept. The default is worked out afresh each time, so a render during
   // loading, before each coder's view of the samples is set, cannot fix the wrong sample in place.
   return defaultSample(ss, V.pick[frame.id]);
@@ -244,7 +259,7 @@ export function renderVerify(root) {
   const frames = verifiableFrames();
   if (!S.review.first_layer || !frames.length) { root.replaceChildren(h('div', { class: 'page' }, h('h1', { text: 'Verify' }), h('p', { class: 'muted', text: 'This review has no coded layer to verify yet.' }))); return; }
   // open on a frame that holds items for this coder, so a coder whose sample is on a second frame lands on it
-  const mineIn = (f) => S.samples.some((x) => x.frame === f.id && x.layer === layerOf(f.id, S.review) && x.coders && x.assigned && (x.units || []).length);
+  const mineIn = (f) => S.samples.some((x) => x.frame === f.id && sameLayer(x.layer, layerOf(f.id, S.review), S.review) && x.coders && x.assigned && (x.units || []).length);
   // the default is worked out afresh until loading ends: samples on other layers are not known before then
   const frameId = frames.find((f) => f.id === V.frame) ? V.frame : (frames.find(mineIn) || frames[0]).id;
   if (S.ready) V.frame = frameId;
@@ -253,10 +268,10 @@ export function renderVerify(root) {
   if (V.mode === 'doc' && !feature('document_view')) V.mode = 'fragment';
   if (V.mode === 'doc') { renderDocView(root); return; }
   S.frameInView = baseFrame.id; // the header's orientation and codebook follow the frame in view
-  const samples = S.samples.filter((s) => s.frame === baseFrame.id && s.layer === layerOf(baseFrame.id, S.review));
+  const samples = S.samples.filter((s) => s.frame === baseFrame.id && sameLayer(s.layer, layerOf(baseFrame.id, S.review), S.review));
   if (!samples.length || V.sampleId === '__new') { renderSampler(root, baseFrame); return; }
   const sample = currentSample(baseFrame);
-  const frame = frameFor(baseFrame, sample);
+  const frame = frameFor(baseFrame, sample, verifyOpts(baseFrame.id, sample));
   if (sample.coders && !sample.units.length) {
     root.replaceChildren(modeBar(root), h('div', { class: 'page narrow' }, h('section', { class: 'card' }, h('h2', { text: sample.title || sample.id }),
       h('p', { text: sample.assigned ? 'No items in this sample are assigned to you.' : `This sample is assigned to ${Object.keys(sample.coders).join(' and ')}. You have no items in it.` }),
